@@ -11,12 +11,14 @@ golden_paths_dir = "golden_paths" # IT-approved project templates
 [agent]
 runner = "offline"                # offline (templates, free) | claude (Claude Code CLI, billed)
 max_turns_build = 40
+judge = false                     # LLM-as-judge on spec/plan/build (advisory, billed, agent runners only)
 max_build_attempts = 3            # build -> gate loops per `run` before a human is asked (agent runners only)
 
 [agent.models]                    # passed to `claude --model` (aliases accepted)
 spec = "sonnet"
 plan = "sonnet"
 build = "sonnet"
+judge = "haiku"                   # a different, cheaper model than the generators (no self-grading)
 
 # Gates per maturity rung. The higher the rung, the stricter the factory.
 [gates]

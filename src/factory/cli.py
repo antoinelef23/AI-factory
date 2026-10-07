@@ -30,6 +30,10 @@ def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
         print(f"  note  : {note}")
     if item.it_exceptions:
         print(f"  IT exceptions: {', '.join(item.it_exceptions)}")
+    for kind, j in item.judgements.items():
+        print(
+            f"  judge {kind}: {j['verdict']} ({j['average']}/5, advisory)  work/{item.slug}/judge-{kind}.md"
+        )
     if item.feedback and item.status in ("blocked", "active"):
         print("  feedback:")
         for line in item.feedback.splitlines()[:12]:
@@ -164,6 +168,18 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_judge(args: argparse.Namespace) -> int:
+    f = _foreman(args, "claude")  # judging needs a real model
+    item = f.store.load(args.slug)
+    report = f.judge_artifact(item, args.kind, force=True)
+    if report is None:
+        print(f"nothing to judge: no {args.kind} artifact yet for {item.slug}", file=sys.stderr)
+        return 2
+    f.store.save(item)
+    print(report.markdown())
+    return 0
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     from factory.demo import DemoError, run_demo
 
@@ -236,6 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("board", help="all work items").set_defaults(func=cmd_board)
     sub.add_parser("radar", help="show the company tech radar").set_defaults(func=cmd_radar)
+
+    sp = sub.add_parser("judge", help="LLM judge on an artifact (advisory, billed: uses the judge model)")
+    sp.add_argument("slug")
+    sp.add_argument("--kind", choices=["spec", "plan", "build"], default="spec")
+    sp.set_defaults(func=cmd_judge)
 
     sp = sub.add_parser("demo", help="offline, self-checking walkthrough in a temp folder (about 5 s)")
     sp.add_argument(

@@ -15,6 +15,7 @@ from factory.config import Config
 from factory.design import choose_stack, detect_capabilities, render_design
 from factory.gates import Executor, format_report, run_gates, shell_executor
 from factory.guard import check_project
+from factory.judge import judge
 from factory.radar import BLOCK, MATURITIES, Radar, verdict
 from factory.templates import (
     build_prompt,
@@ -219,6 +220,7 @@ class Foreman:
             if not ok:
                 return False, text
         self.store.write(item, "spec.md", text)
+        self.judge_artifact(item, "spec")
         return True, "spec.md written" + (" (offline template)" if self.runner is None else "")
 
     def _design_report(self, item: WorkItem):
@@ -265,6 +267,7 @@ class Foreman:
             if not ok:
                 return False, text
         self.store.write(item, "tasks.md", text)
+        self.judge_artifact(item, "plan")
         return True, "tasks.md written" + (" (offline template)" if self.runner is None else "")
 
     def _golden_path(self, item: WorkItem) -> str | None:
@@ -277,6 +280,55 @@ class Foreman:
             if tech and tech.golden_path:
                 return tech.golden_path
         return None
+
+    # ------------------------------------------------------------------ judge (advisory)
+    def _judge_inputs(self, item: WorkItem, kind: str) -> tuple[str, str]:
+        """(artifact text, extra context) for a judge call; ('', '') when there is nothing to judge."""
+        if kind == "spec":
+            return self.store.read(item, "spec.md"), ""
+        if kind == "plan":
+            ctx = f"\nSPEC the plan must implement:\n<spec>\n{self.store.read(item, 'spec.md')}\n</spec>\n"
+            ctx += f"DESIGN (allowed stack):\n<design>\n{self.store.read(item, 'design.md')}\n</design>\n"
+            return self.store.read(item, "tasks.md"), ctx
+        app = self.app_dir(item)
+        parts, size = [], 0
+        for path in sorted([*app.glob("app/**/*.py"), *app.glob("tests/**/*.py")]):
+            text = path.read_text(encoding="utf-8")
+            parts.append(f"### {path.relative_to(app).as_posix()}\n{text}")
+            size += len(text)
+            if size > 40_000:
+                break
+        ctx = f"\nSPEC the code must satisfy:\n<spec>\n{self.store.read(item, 'spec.md')}\n</spec>\n"
+        return "\n\n".join(parts), ctx
+
+    def judge_artifact(self, item: WorkItem, kind: str, force: bool = False):
+        """Run the LLM judge on an artifact. Never blocks: it is advice for the reviewer.
+
+        Only with an agent runner and `[agent] judge = true` (billed), unless `force`
+        (explicit `factory judge`)."""
+        if self.runner is None or not (force or self.cfg.judge_enabled):
+            return None
+        artifact, extra = self._judge_inputs(item, kind)
+        if not artifact.strip():
+            return None
+        report = judge(
+            self.runner,
+            kind,
+            artifact,
+            item.idea,
+            model=self.cfg.models.get("judge"),
+            cwd=self.store.dir(item.slug),
+            extra=extra,
+        )
+        item.cost_usd += report.cost_usd
+        item.judgements[kind] = {
+            "verdict": report.verdict,
+            "average": round(report.average, 2),
+            "summary": report.summary,
+        }
+        self.store.write(item, f"judge-{kind}.md", report.markdown())
+        item.log("judged", report.short())
+        return report
 
     def app_dir(self, item: WorkItem) -> Path:
         return self.cfg.apps_dir / item.slug
@@ -350,6 +402,7 @@ class Foreman:
             item.stage = "build"  # the next build gets this detail as feedback
             detail = "\n\n".join(f"[{r.name}] {r.detail}" for r in failed)
             return False, "gates failed:\n" + detail[-3000:]
+        self.judge_artifact(item, "build")
         return True, "gates passed: " + ", ".join(r.name for r in results)
 
 

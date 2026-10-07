@@ -68,6 +68,7 @@ class WorkItem:
     approvals: list[dict] = field(default_factory=list)
     history: list[dict] = field(default_factory=list)
     cost_usd: float = 0.0
+    judgements: dict = field(default_factory=dict)  # kind -> {verdict, average, summary}; advisory only
     build_attempts: int = 0  # total build runs, for telemetry (the retry budget is per `run`)
 
     @property

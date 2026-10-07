@@ -51,6 +51,35 @@ class FakeAgentRunner:
         return AgentResult(True, self.text, 0.01)
 
 
+class JudgingAgentRunner(FakeAgentRunner):
+    """Answers judge prompts with valid, GROUNDED JSON (quotes the artifact's first line).
+
+    `score` is what it gives every criterion; other prompts get a normal agent answer."""
+
+    def __init__(self, score: int = 5, text: str = "# generated\n") -> None:
+        super().__init__(text)
+        self.score = score
+
+    def run(self, prompt: str, **kw):
+        import json
+        import re
+
+        from factory.agents import AgentResult
+        from factory.judge import RUBRICS
+
+        if "independent reviewer" not in prompt:
+            return super().run(prompt, **kw)
+        self.prompts.append((prompt, kw))
+        kind = re.search(r"reviewer of a (\w+) produced", prompt).group(1)
+        artifact = re.search(r"<artifact>\n(.*?)\n</artifact>", prompt, re.S).group(1)
+        quote = next(ln.strip() for ln in artifact.splitlines() if len(ln.strip()) > 8)[:100]
+        crit = [
+            {"id": c, "score": self.score, "evidence": f"{c} judged", "quote": quote}
+            for c, _ in RUBRICS[kind]
+        ]
+        return AgentResult(True, json.dumps({"criteria": crit, "summary": "fake judge"}), 0.002)
+
+
 @pytest.fixture
 def factory_root(tmp_path: Path) -> Path:
     """A throwaway factory: the real factory.toml, radar and golden paths, empty work/apps."""
