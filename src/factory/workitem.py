@@ -75,6 +75,7 @@ class WorkItem:
     judgements: dict = field(default_factory=dict)  # kind -> {verdict, average, summary}; advisory only
     build_attempts: int = 0  # total build runs, for telemetry (the retry budget is per `run`)
     approved_hashes: dict = field(default_factory=dict)  # spec.md / design.md sha256 at human approval
+    claudo_review: dict = field(default_factory=dict)  # {cp, verdict, report}: Claudo's reviewer, shown to IT
     claudo_cost_seen: float = 0.0  # Claudo journal spend already added to cost_usd
     claudo_cp: str = ""  # human checkpoint Claudo is paused at (e.g. CP-1); "" = none pending
     claudo_rejection: dict = field(default_factory=dict)  # {cp, reason, by}: IT rejected, rework pending

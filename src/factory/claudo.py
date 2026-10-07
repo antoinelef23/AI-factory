@@ -226,6 +226,17 @@ class ClaudoEngine:
         return p.returncode == 0, (p.stdout + p.stderr).strip()
 
     @staticmethod
+    def review_verdict(project: Path, slug: str, cp: str) -> tuple[str, str] | None:
+        """(verdict, report path relative to the project) of Claudo's reviewer panel at checkpoint `cp`,
+        or None when no report exists. The verdict is what the human decides on: PASS | WARN | BLOCK."""
+        report = project / "work" / slug / ".runs" / f"{cp}-review.md"
+        if not report.is_file():
+            return None
+        head = report.read_text(encoding="utf-8", errors="replace")[:600]
+        match = re.search(r"aggregated verdict:\s*(PASS|WARN|BLOCK)", head)
+        return (match.group(1) if match else "UNKNOWN", report.relative_to(project).as_posix())
+
+    @staticmethod
     def journal_cost(project: Path, slug: str) -> float:
         """Total model spend Claudo recorded for this feature (tolerant: a torn line or no journal is 0)."""
         path = project / "work" / slug / ".runs" / "journal.jsonl"

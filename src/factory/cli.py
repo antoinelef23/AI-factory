@@ -46,6 +46,9 @@ def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
         lapsed = item.expired_exceptions(today)
         if lapsed:
             print(f"  EXPIRED exceptions: {', '.join(lapsed)}: renew with `factory allow`")
+    if item.claudo_review:
+        r = item.claudo_review
+        print(f"  Claudo reviewer {r['cp']}: {r['verdict']}  apps/{item.slug}/{r['report']}")
     for kind, j in item.judgements.items():
         print(
             f"  judge {kind}: {j['verdict']} ({j['average']}/5, advisory)  work/{item.slug}/judge-{kind}.md"

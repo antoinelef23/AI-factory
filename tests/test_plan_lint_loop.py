@@ -36,6 +36,9 @@ class FakeEngine:
             return LintResult(warnings=["T1: no executable verify"])
         return LintResult(errors=["no task recognized — check the format `### T1 — title`"])
 
+    def review_verdict(self, project, slug, cp):
+        return None
+
     def run_build(self, slug, project, **kw):  # only reached once the owner approved a plan
         from factory.claudo import BuildResult
 

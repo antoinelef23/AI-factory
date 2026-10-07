@@ -184,6 +184,18 @@ class Foreman:
             self._record_hash(item, "design.md")
         if item.stage == "plan_review":
             self._mark_plan_approved(item, by)
+        if (
+            item.stage == "ship_review"
+            and item.claudo_review.get("verdict") not in (None, "PASS")
+            and not note.strip()
+        ):
+            # The human decides, but not blind: shipping over the reviewer's objection must be justified, and
+            # the justification is recorded with the approval.
+            raise FactoryError(
+                f"Claudo's reviewer said {item.claudo_review['verdict']} "
+                f"(see apps/{item.slug}/{item.claudo_review['report']}): to ship anyway, approve with "
+                '--note "why this is acceptable"; or reject with --reason to have it reworked'
+            )
         if item.stage == "ship_review" and item.claudo_cp:
             ok, detail = self._finalize_with_claudo(item, by or role)
             if not ok:  # signing or the final orchestrator run failed: nothing ships
@@ -566,6 +578,10 @@ class Foreman:
         self._add_claudo_cost(item, app)
         if res.outcome == "checkpoint":
             item.claudo_cp = res.checkpoint
+            review = self.engine.review_verdict(app, item.slug, res.checkpoint)
+            item.claudo_review = (
+                {"cp": res.checkpoint, "verdict": review[0], "report": review[1]} if review else {}
+            )
             return True, f"{scaffold}; Claudo built the plan, paused at {res.checkpoint}"
         if res.outcome == "done":
             item.claudo_cp = ""

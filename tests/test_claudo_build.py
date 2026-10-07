@@ -18,6 +18,7 @@ class ScriptedClaudo:
         )
         self.runs, self.signed, self.rejected, self.sign_error = [], [], [], sign_error
         self.journal_total = 0.0
+        self.review = ("PASS", "work/x/.runs/CP-1-review.md")
         self.trajectory_result = (True, "[trajectory] OK")
 
     def lint_plan(self, slug, **kw):
@@ -28,6 +29,9 @@ class ScriptedClaudo:
 
     def trajectory(self, project, slug, timeout=60):
         return self.trajectory_result
+
+    def review_verdict(self, project, slug, cp):
+        return self.review
 
     def run_build(self, slug, project, *, stop_at_checkpoint=True, env=None, timeout=3600):
         self.runs.append(
