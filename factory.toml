@@ -1,0 +1,30 @@
+# Factory definition: the one file that says how this factory ships.
+# Paths are relative to this file.
+
+[factory]
+name = "AI Software Factory"
+radar = "radar.toml"              # maintained by the IT department
+work_dir = "work"                 # one folder per work item (idea -> spec -> design -> tasks)
+apps_dir = "apps"                 # the shipped applications
+golden_paths_dir = "golden_paths" # IT-approved project templates
+
+[agent]
+runner = "offline"                # offline (templates, free) | claude (Claude Code CLI, billed)
+max_turns_build = 40
+
+[agent.models]                    # passed to `claude --model` (aliases accepted)
+spec = "sonnet"
+plan = "sonnet"
+build = "sonnet"
+
+# Gates per maturity rung. The higher the rung, the stricter the factory.
+[gates]
+pov = ["radar", "secrets"]
+poc = ["radar", "secrets", "tests"]
+mvp = ["radar", "secrets", "tests", "lint"]
+prod = ["radar", "secrets", "tests", "lint"]
+
+# Shell commands for command-based gates, run inside the app folder.
+[gates.commands]
+tests = "uv run --quiet pytest -q"
+lint = "uv run --quiet ruff check ."

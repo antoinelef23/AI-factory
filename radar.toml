@@ -1,0 +1,193 @@
+# Company tech radar: OWNED BY THE IT DEPARTMENT. Change it by pull request.
+#
+# ring:     adopt | trial | assess | hold
+# category: the capability a technology fills; the design compiler picks one per capability
+# match:    names that detect the tech in manifests (pyproject, package.json, requirements),
+#           imports, Docker images and design docs (case-insensitive, normalized)
+# What each ring allows per maturity (pov/poc/mvp/prod) is fixed in src/factory/radar.py.
+
+company = "Example Corp"
+version = "2026.10"
+
+# ---------------------------------------------------------------- language
+[[tech]]
+id = "python"
+name = "Python 3.12+"
+category = "language"
+ring = "adopt"
+match = ["python"]
+preferred = true
+
+[[tech]]
+id = "typescript"
+name = "TypeScript"
+category = "language"
+ring = "adopt"
+match = ["typescript"]
+
+# ---------------------------------------------------------------- backend
+[[tech]]
+id = "fastapi"
+name = "FastAPI"
+category = "backend"
+ring = "adopt"
+match = ["fastapi", "uvicorn", "starlette"]
+golden_path = "python-fastapi"
+preferred = true
+
+[[tech]]
+id = "django"
+name = "Django"
+category = "backend"
+ring = "trial"
+match = ["django"]
+
+[[tech]]
+id = "flask"
+name = "Flask"
+category = "backend"
+ring = "hold"
+match = ["flask"]
+replaced_by = "fastapi"
+
+# ---------------------------------------------------------------- frontend
+[[tech]]
+id = "react"
+name = "React"
+category = "frontend"
+ring = "adopt"
+match = ["react", "react-dom"]
+preferred = true
+
+[[tech]]
+id = "htmx"
+name = "HTMX"
+category = "frontend"
+ring = "trial"
+match = ["htmx"]
+
+[[tech]]
+id = "angularjs"
+name = "AngularJS (1.x)"
+category = "frontend"
+ring = "hold"
+match = ["angularjs", "angular.js"]
+replaced_by = "react"
+
+# ---------------------------------------------------------------- database
+[[tech]]
+id = "postgresql"
+name = "PostgreSQL"
+category = "database"
+ring = "adopt"
+match = ["postgresql", "postgres", "psycopg", "psycopg2", "psycopg-binary", "asyncpg"]
+preferred = true
+
+[[tech]]
+id = "sqlite"
+name = "SQLite"
+category = "database"
+ring = "assess"
+match = ["sqlite", "sqlite3", "aiosqlite"]
+
+[[tech]]
+id = "mongodb"
+name = "MongoDB"
+category = "database"
+ring = "hold"
+match = ["mongodb", "mongo", "pymongo", "motor"]
+replaced_by = "postgresql"
+
+# ---------------------------------------------------------------- libraries
+[[tech]]
+id = "pydantic"
+name = "Pydantic v2"
+category = "library"
+ring = "adopt"
+match = ["pydantic", "pydantic-settings"]
+
+[[tech]]
+id = "sqlalchemy"
+name = "SQLAlchemy 2"
+category = "library"
+ring = "adopt"
+match = ["sqlalchemy"]
+
+[[tech]]
+id = "httpx"
+name = "HTTPX"
+category = "library"
+ring = "adopt"
+match = ["httpx"]
+
+[[tech]]
+id = "requests"
+name = "Requests"
+category = "library"
+ring = "hold"
+match = ["requests"]
+replaced_by = "httpx"
+
+# ---------------------------------------------------------------- testing & quality
+[[tech]]
+id = "pytest"
+name = "pytest"
+category = "testing"
+ring = "adopt"
+match = ["pytest", "pytest-asyncio", "pytest-cov"]
+preferred = true
+
+[[tech]]
+id = "ruff"
+name = "Ruff"
+category = "quality"
+ring = "adopt"
+match = ["ruff"]
+
+# ---------------------------------------------------------------- delivery
+[[tech]]
+id = "github-actions"
+name = "GitHub Actions"
+category = "ci"
+ring = "adopt"
+match = ["github actions", "github-actions"]
+preferred = true
+
+[[tech]]
+id = "docker"
+name = "Docker"
+category = "hosting"
+ring = "adopt"
+match = ["docker", "dockerfile"]
+preferred = true
+
+[[tech]]
+id = "kubernetes"
+name = "Kubernetes"
+category = "hosting"
+ring = "trial"
+match = ["kubernetes", "k8s", "helm"]
+
+# ---------------------------------------------------------------- AI
+[[tech]]
+id = "claude-api"
+name = "Claude API (Anthropic SDK)"
+category = "ai"
+ring = "adopt"
+match = ["anthropic", "claude api"]
+preferred = true
+
+[[tech]]
+id = "langchain"
+name = "LangChain"
+category = "ai"
+ring = "assess"
+match = ["langchain", "langchain-core", "langgraph"]
+
+# ---------------------------------------------------------------- messaging
+[[tech]]
+id = "kafka"
+name = "Apache Kafka"
+category = "messaging"
+ring = "trial"
+match = ["kafka", "confluent-kafka", "aiokafka"]
