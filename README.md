@@ -93,6 +93,17 @@ uv run factory approve expense-tracker --as it
 - **IT changes the radar:** move `fastapi` to `hold` in `radar.toml` and re-run `factory check apps/<slug>`.
 - **Claudo handoff:** `uv run factory export <slug> --claudo C:\Users\Antoine\Projets\AI-Workflow-gates\_build`.
 
+## Bring your own radar
+
+```powershell
+uv run factory radar-import company-radar.csv --company "Acme" --version 2026.10   # writes radar.imported.toml
+```
+
+Reads a Thoughtworks-BYOR-style CSV or JSON (comma, semicolon or tab; Excel's BOM; ring names in English or
+French: Adopter / Essayer / Évaluer / Suspendre). It never overwrites your radar without `--force`, and it tells you
+what an export cannot know: each technology's **capability category** (backend, database, ...), which the design
+compiler needs to *choose* a stack. Add a `category` column (and `replaced_by` for hold technologies) for full effect.
+
 ## When IT changes the radar: diff and drift
 
 ```powershell

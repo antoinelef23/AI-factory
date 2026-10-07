@@ -14,6 +14,7 @@ from factory.config import ConfigError, find_root, load_config
 from factory.drift import radar_diff, render_diff, scan_drift
 from factory.foreman import FactoryError, Foreman, describe_step
 from factory.guard import check_project
+from factory.importer import import_radar
 from factory.radar import MATURITIES, POLICY, RINGS, RadarError, load_radar
 from factory.workitem import ROLES, Store, WorkItem
 
@@ -135,6 +136,29 @@ def cmd_board(args: argparse.Namespace) -> int:
     for i in items:
         waiting = i.step.role if i.status == "waiting" else ("fix" if i.status == "blocked" else "-")
         print(f"{i.slug:<34} {i.maturity:<5} {i.stage:<14} {i.status:<8} {waiting}")
+    return 0
+
+
+def cmd_radar_import(args: argparse.Namespace) -> int:
+    """Convert a company radar (CSV/JSON export) to radar.toml. Never overwrites IT's radar by accident."""
+    root = Path(args.root).resolve() if args.root else find_root()
+    source = Path(args.source)
+    out = Path(args.out) if args.out else root / "radar.imported.toml"
+    result = import_radar(
+        source.read_text(encoding="utf-8"), source=source.name, company=args.company, version=args.version
+    )
+    for problem in result.problems:
+        print(f"error: {problem}", file=sys.stderr)
+    if not result.ok:
+        return 2
+    if out.exists() and not args.force:
+        raise FactoryError(f"{out} exists: choose another --out, or pass --force to overwrite it")
+    out.write_text(result.toml, encoding="utf-8", newline="\n")
+    load_radar(out)  # the file we wrote must be one the factory accepts
+    print(f"Imported {sum(result.counts.values())} technologies into {out}")
+    print("  " + ", ".join(f"{ring}: {n}" for ring, n in result.counts.items()))
+    for warning in result.warnings:
+        print(f"  warning: {warning}")
     return 0
 
 
@@ -300,6 +324,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("board", help="all work items").set_defaults(func=cmd_board)
     sub.add_parser("radar", help="show the company tech radar").set_defaults(func=cmd_radar)
+
+    sp = sub.add_parser(
+        "radar-import", help="IT: convert a CSV/JSON radar export (Thoughtworks BYOR style) to radar.toml"
+    )
+    sp.add_argument("source", help="the export (.csv or .json); needs a name and a ring column")
+    sp.add_argument("--out", help="where to write (default: radar.imported.toml next to factory.toml)")
+    sp.add_argument("--company", default="", help="company name recorded in the radar")
+    sp.add_argument("--version", default="", help="radar version recorded in the radar, e.g. 2026.10")
+    sp.add_argument("--force", action="store_true", help="overwrite --out if it exists")
+    sp.set_defaults(func=cmd_radar_import)
 
     sp = sub.add_parser("radar-diff", help="IT: what changed between two radars, and what it newly forbids")
     sp.add_argument("old", help="the previous radar.toml (e.g. from git show HEAD~1:radar.toml)")
