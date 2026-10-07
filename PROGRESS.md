@@ -7,7 +7,7 @@ Plan: [ROADMAP.md](ROADMAP.md). Strategy: [PLANS.md](PLANS.md). How to run: [REA
 **Phase 0 complete. Phase 1 core complete** (P1-1, P1-3, P1-4, P1-6). Local git history only, **nothing pushed**.
 The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
-**Verification command:** `just check` (ruff check + format check + pytest). Last run: **248 passed**.
+**Verification command:** `just check` (ruff check + format check + pytest). Last run: **257 passed, 1 skipped** (the skipped one is the billed calibration, `just calibrate`).
 Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-ci` green on **Windows and Linux (WSL)**.
 
 ### Roadmap items done
@@ -44,11 +44,19 @@ Fixes born from live3: planner told the app is already scaffolded (+ file list),
 after IT approves (Claudo reviews before polling for the token). Candidates: cheaper reviewer for MVP, skip the
 second review (needs a Claudo change).
 
-### LLM judge (advisory, off by default)
-- 93% of a judge call's cost is hidden thinking; capping thinking (3000 or 0) saved money but **missed invented
-  requirements** (fidelity 5 vs 3), so the default stays at the model default (n = 1 per setting: indicative).
-- Quote grounding rejected valid evidence because judges stitch passages with "..."; every fragment must now occur in
-  order. Judge still never blocks.
+### LLM judge (advisory, off by default): calibrated
+`just calibrate` (billed, ~$0.2) scores a known-good, agent-written spec against 4 degraded copies (no evals, no
+examples, an invented requirement, vague outcomes). Findings:
+- First run exposed a contradiction in MY system: the judge failed the good spec for "inventing /health", which the
+  factory's own spec prompt mandates. The fidelity rubric now exempts the two mandated additions (regression test).
+- haiku (original default): answers frequently **unreliable** (ungrounded quotes); run B: 0 conclusive. Earlier
+  runs: caught some, missed others, noisy.
+- sonnet: **caught 4/4 (run A) and 3/4 (run B)** for $0.05-0.17 per 5 calls (cheaper than haiku, it thinks less).
+  Both models are weakest at noticing a *missing* evals table: structure is better checked deterministically.
+- Decision: default judge = **sonnet**. Caveat, untested: it is also a generator (self-preference bias).
+- Measurement lessons: a missing baseline score gave a bogus drop (now "inconclusive"); n = 2 per model is still thin.
+- Cost mechanics: 93% of a haiku judge call was hidden thinking; capping thinking missed invented requirements.
+- Quote grounding rejected valid evidence when judges stitch passages with "..."; now every fragment must occur in order.
 
 ## Not verified
 - CI workflow (needs a push; a push needs Antoine's go-ahead).

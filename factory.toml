@@ -14,14 +14,17 @@ max_turns_build = 40
 judge = false                     # LLM-as-judge on spec/plan/build (advisory, billed, agent runners only)
 # judge_thinking_tokens: unset = model default. Measured on one real spec (haiku): default thinking ~$0.08 and
 # caught invented requirements; budget 3000 ~$0.05; budget 0 ~$0.02 but MISSED them (fidelity 5). Cheap judging
-# is a false economy, so leave it unset unless you re-run the calibration (`just calibrate`, billed).
+# is a false economy, so leave it unset unless you re-run the calibration.
 max_build_attempts = 3           # build -> gate loops per `run` before a human is asked (agent runners only)
 
 [agent.models]                    # passed to `claude --model` (aliases accepted)
 spec = "sonnet"
 plan = "sonnet"
 build = "sonnet"
-judge = "haiku"                   # a different, cheaper model than the generators (no self-grading)
+# Calibrated with `just calibrate` (good spec vs 4 degraded copies, 2 runs each): sonnet caught 7/8 for ~$0.05-0.17
+# per 5 calls; haiku gave unreliable answers (ungrounded quotes) and caught nothing conclusive. Caveat: sonnet is
+# also a generator, so self-preference bias is untested; re-run the calibration before trusting a new judge.
+judge = "sonnet"
 
 [policy]
 # An IT exception is a debt, not a permanent right: the ones granted when IT approves a design review lapse

@@ -26,7 +26,9 @@ RUBRICS: dict[str, list[Criterion]] = {
             "fidelity",
             "captures EVERY concrete requirement and number of the idea AND adds no business rule, number, "
             "limit, target or fixed list the idea does not state (score 3 or less if it invents any; pure "
-            "technical elaboration of the idea's own rules, such as an error format, is fine)",
+            "technical elaboration of the idea's own rules, such as an error format, is fine). The factory "
+            "MANDATES two additions in every spec, which are NOT inventions: a `GET /health` behavior and an "
+            "invariant that only technologies allowed by the company tech radar are used",
         ),
         (
             "testability",

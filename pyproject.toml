@@ -22,7 +22,8 @@ dev = ["pytest", "ruff"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
+markers = ["live: calls a paid model; opt-in with --live (just calibrate)"]
 
 [tool.ruff]
 line-length = 110

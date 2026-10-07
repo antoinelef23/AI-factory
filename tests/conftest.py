@@ -110,3 +110,19 @@ def executor() -> FakeExecutor:
 def foreman(factory_root: Path, executor: FakeExecutor) -> Foreman:
     cfg = load_config(factory_root)
     return Foreman(cfg, load_radar(cfg.radar_path), Store(cfg.work_dir), runner=None, executor=executor)
+
+
+def pytest_addoption(parser):
+    parser.addoption("--live", action="store_true", help="run the tests that call a paid model")
+
+
+def pytest_collection_modifyitems(config, items):
+    """`live` tests call a paid model: they only run with --live (`just calibrate`) or FACTORY_LIVE=1."""
+    import os
+
+    if config.getoption("--live") or os.environ.get("FACTORY_LIVE") == "1":
+        return
+    skip = pytest.mark.skip(reason="billed: pass --live (just calibrate) to run")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip)

@@ -137,8 +137,12 @@ No Claudo found: the factory still runs, plans are simply not linted and everyth
 
 `[agent] judge = true` (billed) scores each spec, plan and build against a rubric. It **never blocks**: it tells the
 human reviewer where an artifact looks weak. Every score must quote the artifact verbatim (checked by code,
-ungrounded scores are discarded), the verdict is computed from the scores, and the judge uses a different, cheaper
-model than the generators. `uv run factory judge <slug> --kind spec|plan|build` runs it on demand.
+ungrounded scores are discarded) and the verdict is computed from the scores. It is **calibrated**: `just calibrate`
+(billed, ~$0.2) scores a known-good spec against four deliberately degraded copies. Result so far: sonnet caught 7 of 8,
+haiku's answers were unreliable (ungrounded quotes), so the default judge is sonnet. It is weakest at noticing a
+*missing* evals table (deterministic checks cover structure better), and it shares a model family with the generators.
+
+`uv run factory judge <slug> --kind spec|plan|build` runs it on demand.
 
 ## What it costs (measured, Sonnet generators)
 
@@ -146,7 +150,7 @@ model than the generators. `uv run factory judge <slug> --kind spec|plan|build` 
 |---|---|
 | single agent, whole 7-module expense API (POC) | **$0.71**, ~3.5 min, gates green first try |
 | plan written by an agent | ~$0.15, passes Claudo's plan-lint first try |
-| judge call (haiku, default thinking) | $0.05 to $0.09 per artifact |
+| judge call (sonnet, calibrated) | ~$0.01 to $0.04 per artifact (5-call calibration: $0.05 to $0.17) |
 | Claudo, one task, before the planner was told the app already exists | **$3.29**, 11 min (two attempts) |
 
 Claudo's per-task rigor is several times the single agent, so it is reserved for MVP and above (`build_from`) and

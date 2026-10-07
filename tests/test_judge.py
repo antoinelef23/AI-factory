@@ -160,3 +160,17 @@ def test_prompt_lists_every_criterion_and_demands_verbatim_quotes(kind):
     assert all(cid in prompt for cid, _ in RUBRICS[kind])
     assert "ARTIFACT-BODY" in prompt and "IDEA-BODY" in prompt
     assert "verbatim" in prompt and "ONLY this JSON" in prompt
+
+
+def test_the_fidelity_rubric_does_not_penalize_what_the_factory_itself_mandates():
+    """Regression (calibration): the judge failed a known-good spec for 'inventing /health', which the
+    factory's own spec prompt requires. The rubric and the spec prompt must agree."""
+    from factory.templates import spec_prompt
+    from factory.workitem import WorkItem
+
+    fidelity = dict(RUBRICS["spec"])["fidelity"]
+    prompt = spec_prompt(WorkItem(slug="x", title="X", idea="i", maturity="poc"), "")
+    assert "GET /health" in prompt and "tech radar" in prompt  # what the factory mandates...
+    assert (
+        "GET /health" in fidelity and "tech radar" in fidelity and "NOT inventions" in fidelity
+    )  # ...is exempt
