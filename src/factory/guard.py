@@ -19,7 +19,9 @@ IGNORE_BLOCK = re.compile(r"<!--\s*radar:ignore\s*-->.*?<!--\s*/radar:ignore\s*-
 
 # A plan line that names a technology only to forbid it ("Do not add Flask") is a guardrail, not usage.
 NEGATION = re.compile(
-    r"\b(not|never|no|don't|dont|avoid|without|forbidden|prohibited|instead of|rather than|replace[sd]?)\b",
+    r"\b(not|never|no|don't|dont|avoid|without|forbidden|prohibited|instead of|rather than|replace[sd]?"
+    r"|remov(e|es|ed|ing)|drop(s|ped|ping)?|delet(e|es|ed|ing)|eliminat(e|es|ed|ing)|get rid of"
+    r"|migrat(e|es|ed|ing) (away )?(from|off)|phase[sd]? out|uninstall(s|ed|ing)?)\b",
     re.I,
 )
 TASK_HEADER = re.compile(r"^###\s+((?:T|CP-)\d+)\b")

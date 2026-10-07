@@ -12,7 +12,7 @@ branch tracks `portable` and `remote.pushDefault = portable` so a plain `git pus
 **CI is green** on GitHub (Windows + Ubuntu for the factory; Claudo's own gate workflow on Linux).
 The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
-**Verification command:** `just check` (ruff check + format check + pytest). Last run: **296 passed, 1 skipped** (also green in GitHub CI on Windows and Ubuntu; the real-engine integration tests skip there because no Claudo checkout is present) (the skipped one is the billed calibration, `just calibrate`).
+**Verification command:** `just check` (ruff check + format check + pytest). Last run: **347 passed, 1 skipped** (also green in GitHub CI on Windows and Ubuntu; the real-engine integration tests skip there because no Claudo checkout is present) (the skipped one is the billed calibration, `just calibrate`).
 Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-ci` green on **Windows and Linux (WSL)**.
 
 ### Roadmap items done
@@ -31,6 +31,7 @@ Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-
 | P3-2 radar diff, P3-6 drift (partial) | done | `radar-diff`, `drift [--open]`; real CLI story verified; migration items tracked, not executable until P2-6 |
 | P3-7 exceptions with expiry | done | design-review exceptions lapse after `[policy] exception_days` (180), `allow --expires --reason`; the build gate and drift ignore lapsed ones; mutation-checked |
 | P3-1 radar importer (partial) | done | `radar-import` for CSV/JSON (BYOR style, `;`/tab delimiters, BOM, French ring names); validated through the factory's own loader; imported radar drives a full item |
+| P2-6 change an existing app | done | `change`/`merge`/`abandon`; branch `factory/<slug>`, fast-forward-only merge by IT; migrations from `drift --open` are runnable; full story tested with an agent that really edits the app (migrate -> approve -> merge -> drift clean); fast-forward rule mutation-checked |
 | P1-7, P1-10 | open | see Next |
 
 ### Live runs and what they taught (all in scratch copies, not committed)
@@ -96,6 +97,6 @@ examples, an invented requirement, vague outcomes). Findings:
 ## Next steps (in order)
 1. P1-7: sandbox runner by default for MVP+ builds. NOT a quick win: Claudo's sandbox needs an egress-allowlist proxy
    that does not exist yet (its own backlog) and Docker is not running here; needs a decision and a setup session.
-2. P2-6 change an existing app (unblocks migration items); radar importers for Backstage/other formats.
+2. Radar importers for Backstage/other formats; P2-1..P2-5 real delivery (pull requests, GitHub issue intake); a live run of a change through Claudo (not done yet).
 3. Ask Antoine before spending more: a live run through the reject path (~$3-4) and `judge = true` end to end (~$0.5).
 4. Phase 2 (real delivery: git repo, PR, GitHub issue intake) needs decisions D3/D6 and a push go-ahead.

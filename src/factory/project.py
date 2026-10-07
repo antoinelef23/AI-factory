@@ -110,12 +110,116 @@ def porcelain(app: Path) -> list[str]:
     return [line[3:].strip().strip('"') for line in out.splitlines() if line.strip()]
 
 
-def commit_leftovers(app: Path, slug: str) -> list[str]:
-    """Commit everything left uncommitted so that HEAD is the delivered state. Returns the files committed."""
+def commit_all(app: Path, message: str) -> list[str]:
+    """Commit everything uncommitted; "{files}" in `message` becomes the file list. Returns the files."""
     files = porcelain(app)
     if not files:
         return []
     _git(app, "add", "-A")
     shown = ", ".join(files[:12]) + (f" (+{len(files) - 12} more)" if len(files) > 12 else "")
-    _git(app, "commit", "-q", "-m", LEFTOVERS_COMMIT.format(slug=slug, files=shown))
+    _git(app, "commit", "-q", "-m", message.replace("{files}", shown))
     return files
+
+
+def commit_leftovers(app: Path, slug: str) -> list[str]:
+    """Commit everything left uncommitted so that HEAD is the delivered state. Returns the files committed."""
+    return commit_all(app, LEFTOVERS_COMMIT.replace("{slug}", slug))
+
+
+BASELINE_COMMIT = """chore({slug}): baseline of the app before the change
+
+Why: the change runs on its own branch, and a branch must start from a committed state. Anything
+uncommitted in the app when the change begins is committed here, separately, so the change's own
+diff contains only the change.
+
+Run: auto
+"""
+
+
+def current_branch(app: Path) -> str:
+    return _git(app, "rev-parse", "--abbrev-ref", "HEAD")
+
+
+def branch_exists(app: Path, branch: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "-q", f"refs/heads/{branch}"], cwd=app, capture_output=True
+        ).returncode
+        == 0
+    )
+
+
+def begin_change(app: Path, slug: str) -> tuple[str, str]:
+    """Put the app on the change branch `factory/<slug>`. Returns (base branch, base sha).
+
+    Idempotent: resuming a change that already has its branch switches back to it and keeps the base recorded
+    at its first start (so `merge` knows what the branch started from). A dirty app is baselined first."""
+    prepare_project(app)  # a git repo with a local identity and at least one commit
+    branch = f"factory/{slug}"
+    if branch_exists(app, branch):
+        base = _git(app, "config", "--get", f"branch.{branch}.factory-base") or "main"
+        _git(app, "switch", "-q", branch)
+        reference = base if branch_exists(app, base) else "HEAD"
+        return base, _git(app, "merge-base", reference, branch)
+    base = current_branch(app)
+    if base.startswith("factory/"):
+        raise ProjectError(f"the app is on {base}: finish or merge that change before starting another")
+    if porcelain(app):
+        _git(app, "add", "-A")
+        _git(app, "commit", "-q", "-m", BASELINE_COMMIT.format(slug=slug))
+    sha = _git(app, "rev-parse", "HEAD")
+    _git(app, "switch", "-q", "-c", branch)
+    _git(app, "config", f"branch.{branch}.factory-base", base)
+    return base, sha
+
+
+def merge_fast_forward(app: Path, slug: str) -> str:
+    """Fast-forward the base branch to the change branch (the human's explicit act: the factory never merges
+    on its own). Refuses anything that is not a pure fast-forward. Returns the new base tip."""
+    branch = f"factory/{slug}"
+    if not branch_exists(app, branch):
+        raise ProjectError(f"no branch {branch} in {app}")
+    base = _git(app, "config", "--get", f"branch.{branch}.factory-base") or "main"
+    if porcelain(app):
+        raise ProjectError(f"{app} has uncommitted changes: commit or discard them before merging")
+    _git(app, "switch", "-q", base)
+    try:
+        _git(app, "merge", "--ff-only", branch)
+    except ProjectError as e:
+        _git(app, "switch", "-q", branch)  # leave the app where it was
+        raise ProjectError(
+            f"{base} has moved since the change started, so {branch} cannot fast-forward: rebase the branch "
+            f"onto {base} (or redo the change), then merge again"
+        ) from e
+    _git(app, "branch", "-q", "-d", branch)
+    return _git(app, "rev-parse", "HEAD")
+
+
+CHANGE_TRIPLET_COMMIT = """chore({slug}): add the spec, design and plan of the change
+
+Why: the approved artifacts travel with the code they govern (work/{slug}/), on the change branch.
+
+Run: auto
+"""
+
+CHANGE_BUILD_COMMIT = """feat({slug}): the {kind} built by the build agent
+
+Why: a single build agent does not commit; the factory records its work as one commit on the change
+branch so the diff against the base is exactly the change.
+
+Artifacts: {files}
+Run: auto
+"""
+
+
+def abandon_change(app: Path, slug: str) -> None:
+    """Drop an unwanted change: back to the base branch, branch deleted. Refuses to lose uncommitted work."""
+    branch = f"factory/{slug}"
+    if not branch_exists(app, branch):
+        return
+    if porcelain(app):
+        raise ProjectError(f"{app} has uncommitted changes: commit or discard them before abandoning")
+    base = _git(app, "config", "--get", f"branch.{branch}.factory-base") or "main"
+    if current_branch(app) == branch:
+        _git(app, "switch", "-q", base)
+    _git(app, "branch", "-q", "-D", branch)

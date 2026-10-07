@@ -57,8 +57,11 @@ class WorkItem:
     idea: str
     maturity: str
     requester: str = "business"
-    kind: str = "app"  # app | migration (tracked: brings an existing app back to the radar)
-    target: str = ""  # for a migration: the slug of the app concerned
+    kind: str = "app"  # app | feature | bug | migration (the last three change an EXISTING app)
+    target: str = ""  # for a change: the slug of the shipped app it works on
+    base_branch: str = ""  # a change runs on factory/<slug>; the branch it started from
+    base_sha: str = ""
+    merged: bool = False  # IT merged the change branch (`factory merge`)
     created: str = field(default_factory=now)
     stage: str = "triage"
     status: str = "active"  # active | waiting | blocked | shipped
@@ -83,6 +86,11 @@ class WorkItem:
     @property
     def step(self) -> Step:
         return STEP_BY_NAME[self.stage]
+
+    @property
+    def change_open(self) -> bool:
+        """A change to an existing app, neither merged nor abandoned: it owns that app's branch space."""
+        return self.kind != "app" and not self.merged and self.status != "abandoned"
 
     def expiry_of(self, key: str) -> str:
         return str(self.exception_terms.get(key, {}).get("expires", ""))

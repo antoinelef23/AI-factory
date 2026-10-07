@@ -93,6 +93,23 @@ uv run factory approve expense-tracker --as it
 - **IT changes the radar:** move `fastapi` to `hold` in `radar.toml` and re-run `factory check apps/<slug>`.
 - **Claudo handoff:** `uv run factory export <slug> --claudo C:\Users\Antoine\Projets\AI-Workflow-gates\_build`.
 
+## Change an existing app (feature, bug, migration)
+
+```powershell
+uv run factory change orders "Add CSV export" --idea "Managers can export a month as CSV" --kind feature
+uv run factory run add-csv-export                       # spec -> design -> plan -> build -> gates, as for a new app
+uv run factory approve add-csv-export --as business ...   # same checkpoints; IT reviews from MVP up
+uv run factory merge add-csv-export --as it             # IT's own act: fast-forward only. The factory never merges.
+uv run factory abandon add-csv-export --as owner --reason "no longer needed"
+```
+
+The change works on a **branch `factory/<slug>` of the app's own git repo** and inherits the app's maturity. Its
+design is the app's *existing* stack judged by the *current* radar (a migration's design lists what to remove, and
+the build gates fail until the forbidden technology is really gone). Approval means "ready": the app folder keeps
+showing the change branch until IT merges, so `drift` marks that app *in flight* instead of judging it, but keeps
+failing while a *migration* is pending, since the violation is still there. One open change per app.
+`factory drift --open` now opens migrations that you can simply `run`.
+
 ## Bring your own radar
 
 ```powershell

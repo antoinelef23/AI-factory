@@ -101,7 +101,11 @@ class Drift:
 
 
 def scan_drift(
-    items: list[WorkItem], radar: Radar, apps_dir: Path, today: date | None = None
+    items: list[WorkItem],
+    radar: Radar,
+    apps_dir: Path,
+    today: date | None = None,
+    in_flight: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[list[Drift], list[WorkItem]]:
     """(drifted apps, compliant apps) among shipped items. Honors the IT exceptions recorded for each item
     while they are in force; an EXPIRED exception no longer shelters its technology, so the app drifts."""
@@ -111,11 +115,14 @@ def scan_drift(
     for item in items:
         if item.status != "shipped" or item.kind != "app":
             continue
+        if item.slug in in_flight:
+            continue  # the folder shows the change branch, not the delivered state: not judged until merged
         app = apps_dir / item.slug
         if not app.is_dir():
             continue
-        design = app / "work" / item.slug / "design.md"
-        report = check_project(app, radar, item.maturity, docs=[design])
+        # What the app USES (manifests, imports, images), never its old design prose: design.md records what
+        # was approved at the time, so after a migration it would still name the removed technology.
+        report = check_project(app, radar, item.maturity)
         blocking = report.blocking(item.active_exceptions(today))
         (drifted.append(Drift(item, blocking)) if blocking else clean.append(item))
     return drifted, clean

@@ -32,6 +32,9 @@ def _foreman(args: argparse.Namespace, runner_name: str | None = None) -> Forema
 
 def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
     print(f"{item.slug}  [{item.maturity}]  {item.title}")
+    if item.kind != "app":
+        state = "merged" if item.merged else ("abandoned" if item.status == "abandoned" else "not merged yet")
+        print(f"  change: {item.kind} of {item.target}, branch factory/{item.slug} ({state})")
     print(f"  stage : {describe_step(item.stage)}")
     print(f"  status: {item.status}" + (f"   cost: ${item.cost_usd:.2f}" if item.cost_usd else ""))
     for note in item.notes:
@@ -66,6 +69,8 @@ def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
     elif item.status == "blocked":
         print(f"  next  : fix or explain, then `factory run {item.slug}`")
         print(f"  report: work/{item.slug}/gate-report.md")
+    elif item.status == "shipped" and item.kind != "app" and not item.merged:
+        print(f"  next  : factory merge {item.slug} --as it   (IT merges: the factory never does)")
     elif item.status == "shipped":
         print(f"  app   : {f.app_dir(item)}")
     if verbose:
@@ -80,6 +85,29 @@ def cmd_intake(args: argparse.Namespace) -> int:
     item = f.intake(args.title, args.idea, args.maturity, args.requester)
     print(f"Work item created: {item.slug}")
     print(f"Next: factory run {item.slug}   (add --runner claude to use Claude Code)")
+    return 0
+
+
+def cmd_change(args: argparse.Namespace) -> int:
+    f = _foreman(args, "offline")
+    item = f.intake_change(args.target, args.title, args.idea, args.kind, args.requester)
+    print(f"Change created: {item.slug}  ({item.kind} of {item.target}, maturity {item.maturity})")
+    print(f"Next: factory run {item.slug}   (add --runner claude to use Claude Code)")
+    return 0
+
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    f = _foreman(args, "offline")
+    item = f.merge(f.store.load(args.slug), args.role, args.by)
+    print(f"Merged {item.slug} into {item.base_branch} of {item.target} (fast-forward).")
+    print("The app folder now shows the delivered state again; `factory drift` will judge it.")
+    return 0
+
+
+def cmd_abandon(args: argparse.Namespace) -> int:
+    f = _foreman(args, "offline")
+    item = f.abandon(f.store.load(args.slug), args.role, args.reason, args.by)
+    print(f"Abandoned {item.slug}: {item.target} is free for another change.")
     return 0
 
 
@@ -176,8 +204,18 @@ def cmd_radar_diff(args: argparse.Namespace) -> int:
 def cmd_drift(args: argparse.Namespace) -> int:
     """Re-check every shipped app against the CURRENT radar. Exit 1 when any app drifted (usable in CI)."""
     f = _foreman(args, "offline")
-    drifted, clean = scan_drift(f.store.all(), f.radar, f.cfg.apps_dir)
+    items = f.store.all()
+    flying = {i.target for i in items if i.change_open}
+    drifted, clean = scan_drift(items, f.radar, f.cfg.apps_dir, in_flight=flying)
     print(f"Radar {f.radar.company} {f.radar.version}: {len(clean)} compliant, {len(drifted)} drifted")
+    if flying:
+        names = ", ".join(sorted(flying))
+        print(f"  {len(flying)} app(s) with a change in flight, not judged until merged: {names}")
+    # A migration exists because an app violated the radar: until it is merged the violation is still there,
+    # so a scheduled drift check must keep failing instead of going green behind a pending change.
+    pending = [i for i in items if i.change_open and i.kind == "migration"]
+    for m in pending:
+        print(f"  migration pending: {m.slug} (for {m.target}), stage {m.stage}, {m.status}")
     for d in drifted:
         print()
         print(f"  {d.item.slug} [{d.item.maturity}]")
@@ -186,7 +224,7 @@ def cmd_drift(args: argparse.Namespace) -> int:
         if args.open:
             opened = f.open_migration(d)
             print(f"    -> migration item: {opened.slug}" if opened else "    -> migration already tracked")
-    return 1 if drifted else 0
+    return 1 if drifted or pending else 0
 
 
 def cmd_radar(args: argparse.Namespace) -> int:
@@ -285,6 +323,27 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--maturity", default="poc", choices=MATURITIES)
     sp.add_argument("--requester", default="business")
     sp.set_defaults(func=cmd_intake)
+
+    sp = sub.add_parser(
+        "change", help="business: a feature, bug fix or migration for an EXISTING shipped app"
+    )
+    sp.add_argument("target", help="slug of the shipped app")
+    sp.add_argument("title")
+    sp.add_argument("--idea", required=True, help="what should change, in plain words")
+    sp.add_argument("--kind", default="feature", choices=["feature", "bug", "migration"])
+    sp.add_argument("--requester", default="business")
+    sp.set_defaults(func=cmd_change)
+
+    sp = sub.add_parser("merge", help="IT: merge an approved change into the app (fast-forward only)")
+    sp.add_argument("slug")
+    role_opt(sp, ("it",))
+    sp.set_defaults(func=cmd_merge)
+
+    sp = sub.add_parser("abandon", help="IT/owner: drop a change nobody wants, freeing the app")
+    sp.add_argument("slug")
+    role_opt(sp, ("it", "owner"))
+    sp.add_argument("--reason", required=True)
+    sp.set_defaults(func=cmd_abandon)
 
     sp = sub.add_parser("run", help="run automatic stages until the next checkpoint")
     sp.add_argument("slug")

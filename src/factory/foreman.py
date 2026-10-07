@@ -16,18 +16,40 @@ from pathlib import Path
 from factory.agents import BUILD_TOOLS, READ_ONLY_TOOLS, ClaudeRunner, strip_fences
 from factory.claudo import ClaudoEngine, EngineError, LintResult, load_or_create_secret
 from factory.config import Config
-from factory.design import choose_stack, detect_capabilities, render_design
+from factory.design import (
+    CHANGE_KINDS,
+    choose_stack,
+    detect_capabilities,
+    existing_stack,
+    render_change_design,
+    render_design,
+)
 from factory.detect import pyproject_dependencies
 from factory.drift import Drift, migration_idea
 from factory.gates import Executor, GateResult, format_report, run_gates, shell_executor
 from factory.guard import check_project, plan_radar_errors
 from factory.judge import judge
-from factory.project import commit_leftovers, porcelain, prepare_project
+from factory.project import (
+    CHANGE_BUILD_COMMIT,
+    CHANGE_TRIPLET_COMMIT,
+    ProjectError,
+    abandon_change,
+    begin_change,
+    commit_all,
+    commit_leftovers,
+    merge_fast_forward,
+    porcelain,
+    prepare_project,
+)
 from factory.radar import BLOCK, MATURITIES, Radar, verdict
 from factory.templates import (
     SPEC_ID,
     build_prompt,
+    change_build_prompt,
+    change_spec_prompt,
     idea_md,
+    offline_change_spec,
+    offline_change_tasks,
     offline_spec,
     offline_tasks,
     plan_prompt,
@@ -79,43 +101,64 @@ class Foreman:
         self.store.write(item, "idea.md", idea_md(item))
         return item
 
-    def open_migration(self, drift: Drift) -> WorkItem | None:
-        """Track a drifted app as a migration item. Idempotent: None if one is already open for that app."""
-        for existing in self.store.all():
-            if (
-                existing.kind == "migration"
-                and existing.target == drift.item.slug
-                and existing.status != "shipped"
-            ):
-                return None
-        title, idea = migration_idea(drift, self.radar)
+    def _shipped_target(self, target: str) -> WorkItem:
+        """The shipped app a change works on, or a FactoryError saying why it cannot."""
+        try:
+            app_item = self.store.load(target)
+        except KeyError:
+            raise FactoryError(f"no app '{target}' in this factory") from None
+        if app_item.kind != "app" or app_item.status != "shipped":
+            raise FactoryError(f"'{target}' is not a shipped app (status: {app_item.status}): ship it first")
+        if not (self.cfg.apps_dir / target).is_dir():
+            raise FactoryError(f"the folder of app '{target}' is missing: {self.cfg.apps_dir / target}")
+        return app_item
+
+    def intake_change(
+        self, target: str, title: str, idea: str, kind: str = "feature", requester: str = "business"
+    ) -> WorkItem:
+        """A feature, bug fix or migration for an EXISTING shipped app, through the same governed pipeline."""
+        if kind not in CHANGE_KINDS:
+            raise FactoryError(f"a change is one of {CHANGE_KINDS}, not {kind!r}")
+        if not title.strip() or not idea.strip():
+            raise FactoryError("a change needs a title and a description")
+        app_item = self._shipped_target(target)
+        open_change = next((i for i in self.store.all() if i.change_open and i.target == target), None)
+        if open_change is not None:  # one change at a time per app: they share one git branch space
+            raise FactoryError(f"'{target}' already has an open change: {open_change.slug}: merge it first")
         item = WorkItem(
-            slug=self.store.new_slug(f"migrate {drift.item.slug}"),
-            title=title,
-            idea=idea,
-            maturity=drift.item.maturity,
-            requester="radar-drift",
-            kind="migration",
-            target=drift.item.slug,
+            slug=self.store.new_slug(title),
+            title=title.strip(),
+            idea=idea.strip(),
+            maturity=app_item.maturity,
+            requester=requester,
+            kind=kind,
+            target=target,
         )
-        item.log("intake", "opened by `factory drift --open`")
-        self.run(item)  # records the "tracked only" explanation and saves
+        item.log("intake", f"{kind} of {target}, submitted by {requester}")
+        self.store.save(item)
         self.store.write(item, "idea.md", idea_md(item))
+        return item
+
+    def open_migration(self, drift: Drift) -> WorkItem | None:
+        """Open a migration for a drifted app. Idempotent: None if a change is already open for that app."""
+        if any(i.change_open and i.target == drift.item.slug for i in self.store.all()):
+            return None
+        title, idea = migration_idea(drift, self.radar)
+        item = self.intake_change(drift.item.slug, title, idea, "migration", requester="radar-drift")
+        item.log("intake", "opened by `factory drift --open`")
+        self.store.save(item)
         return item
 
     # ------------------------------------------------------------------ driving
     def run(self, item: WorkItem, max_steps: int = 20) -> WorkItem:
         """Run automatic stages until a checkpoint, a failure, or shipped."""
         if item.kind != "app":
-            # Executing a change to an EXISTING app needs a repo-aware flow (ROADMAP P2-6); running it through
-            # the new-app pipeline would scaffold a second, unrelated app. Tracked, never silently misrun.
-            item.status = "blocked"
-            item.feedback = (
-                f"{item.kind} item for '{item.target}': tracked only. Changing an existing app is "
-                "not executable yet (ROADMAP P2-6); fix the app by hand or promote the work to a new item."
-            )
-            self.store.save(item)
-            return item
+            try:
+                self._shipped_target(item.target)
+            except FactoryError as e:  # the app it changes is gone or no longer shipped: nothing to build on
+                item.status, item.feedback = "blocked", str(e)
+                self.store.save(item)
+                return item
         if item.status == "blocked":
             item.status = "active"
             item.log("retry", "resuming after block")
@@ -266,6 +309,8 @@ class Foreman:
         """POV -> POC -> MVP -> prod: back through design with the stricter rules."""
         if role != "it":
             raise FactoryError("only IT can promote an app to a higher maturity")
+        if item.kind != "app":
+            raise FactoryError("only an app is promoted; a change inherits its app's maturity")
         if item.stage != "shipped":
             raise FactoryError("only a shipped item can be promoted")
         if MATURITIES.index(to) <= MATURITIES.index(item.maturity):
@@ -311,10 +356,15 @@ class Foreman:
         )
 
     def _do_spec(self, item: WorkItem) -> tuple[bool, str]:
-        if self.runner is None:
-            text = offline_spec(item)
+        if item.kind != "app":
+            existing = self._read_app_file(item, f"work/{item.target}/spec.md")
+            offline, prompt = offline_change_spec(item), change_spec_prompt(item, item.feedback, existing)
         else:
-            ok, text = self._ask_agent(item, spec_prompt(item, item.feedback), "spec")
+            offline, prompt = offline_spec(item), None
+        if self.runner is None:
+            text = offline
+        else:
+            ok, text = self._ask_agent(item, prompt or spec_prompt(item, item.feedback), "spec")
             if not ok:
                 return False, text
         self.store.write(item, "spec.md", text)
@@ -325,7 +375,39 @@ class Foreman:
         d = self.store.dir(item.slug)
         return check_project(d, self.radar, item.maturity, docs=[d / "design.md"])
 
+    def _read_app_file(self, item: WorkItem, rel: str) -> str:
+        path = self.app_dir(item) / rel
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+    def _do_design_change(self, item: WorkItem) -> tuple[bool, str]:
+        existing = existing_stack(self.app_dir(item), self.radar)
+        text = render_change_design(
+            slug=item.slug,
+            title=item.title,
+            kind=item.kind,
+            target=item.target,
+            maturity=item.maturity,
+            radar=self.radar,
+            existing=existing,
+            gates=self.cfg.gates_for(item.maturity),
+            spec_version="0.1.0",
+        )
+        self.store.write(item, "design.md", text)
+        report = self._design_report(item)
+        blocks = [v for v in report.violations if v.verdict == BLOCK]
+        if blocks:  # cannot happen for a well-formed change design: blocked techs sit in the ignore block
+            return False, "design violates the radar: " + "; ".join(v.describe() for v in blocks)
+        item.skip_design_review = item.maturity in ("pov", "poc") and not report.needs_approval()
+        migrating = [t.id for t in existing.techs if verdict(t, item.maturity) == BLOCK]
+        note = f"; migrating away from: {', '.join(migrating)}" if migrating else ""
+        return (
+            True,
+            f"existing stack of {item.target}: {', '.join(t.id for t in existing.techs) or '-'}{note}",
+        )
+
     def _do_design(self, item: WorkItem) -> tuple[bool, str]:
+        if item.kind != "app":
+            return self._do_design_change(item)
         mentioned = self.radar.scan_text(item.idea)
         choice = choose_stack(
             self.radar, item.capabilities or detect_capabilities(item.idea), item.maturity, mentioned
@@ -378,9 +460,19 @@ class Foreman:
         feedback, lint, tries = item.feedback, None, 0
         while True:
             if self.runner is None:
-                text = offline_tasks(item, self._golden_path(item))
+                text = (
+                    offline_change_tasks(item)
+                    if item.kind != "app"
+                    else offline_tasks(item, self._golden_path(item))
+                )
             else:
-                prompt = plan_prompt(item, feedback, spec_ids, self._scaffold_files(item))
+                prompt = plan_prompt(
+                    item,
+                    feedback,
+                    spec_ids,
+                    self._scaffold_files(item),
+                    change_of=item.target if item.kind != "app" else None,
+                )
                 ok, text = self._ask_agent(item, prompt, "plan")
                 if not ok:
                     return False, text
@@ -475,7 +567,8 @@ class Foreman:
         return report
 
     def app_dir(self, item: WorkItem) -> Path:
-        return self.cfg.apps_dir / item.slug
+        """Where the code lives: its own folder for a new app, the TARGET's folder for a change."""
+        return self.cfg.apps_dir / (item.target if item.kind != "app" else item.slug)
 
     def _golden_deps(self, item: WorkItem) -> list[str]:
         """Runtime and dev dependencies the golden path ships: IT approved them by providing the template."""
@@ -486,7 +579,17 @@ class Foreman:
         return list(dict.fromkeys(pyproject_dependencies(pyproject.read_text(encoding="utf-8"))))
 
     def _scaffold_files(self, item: WorkItem) -> list[str]:
-        """What the app will already contain when the plan starts (the golden path's files)."""
+        """What the app will already contain when the plan starts (the golden path's files, or for a change
+        the files the existing app really has)."""
+        if item.kind != "app":
+            app = self.app_dir(item)
+            skip = {".git", ".venv", "__pycache__", "node_modules", ".pytest_cache", ".ruff_cache", "work"}
+            files = sorted(
+                p.relative_to(app).as_posix()
+                for p in app.rglob("*")
+                if p.is_file() and not skip & set(p.relative_to(app).parts)
+            )
+            return files[:80]
         gp = self._golden_path(item)
         src = self.cfg.golden_paths_dir / gp if gp else None
         if not src or not src.is_dir():
@@ -527,7 +630,87 @@ class Foreman:
                 shutil.copy2(path, dest)
         return f"scaffolded from golden_paths/{gp}"
 
+    def _do_build_change(self, item: WorkItem) -> tuple[bool, str]:
+        """Build a change ON A BRANCH of the existing app: the base stays untouched until IT merges."""
+        app = self.app_dir(item)
+        try:
+            base, sha = begin_change(app, item.slug)
+        except ProjectError as e:
+            return False, str(e)
+        if not item.base_branch:
+            item.base_branch, item.base_sha = base, sha
+        triplet = app / "work" / item.slug
+        triplet.mkdir(parents=True, exist_ok=True)
+        for name in ("idea.md", "spec.md", "design.md", "tasks.md"):
+            text = self.store.read(item, name)
+            if text:
+                (triplet / name).write_text(text, encoding="utf-8", newline="\n")
+        commit_all(app, CHANGE_TRIPLET_COMMIT.replace("{slug}", item.slug))
+        where = f"branch factory/{item.slug} from {item.base_branch}"
+        if self.runner is None:
+            return True, f"{where}; offline build (no agent: the app is unchanged)"
+        if self._uses_claudo(item) and (not item.claudo_cp or item.claudo_rejection):
+            return self._build_with_claudo(item, app, where)
+        forbidden = [t.name for t in self.radar.techs if verdict(t, item.maturity) == BLOCK]
+        result = self.runner.run(
+            change_build_prompt(item, forbidden, item.feedback),
+            cwd=app,
+            model=self.cfg.models.get("build"),
+            tools=BUILD_TOOLS,
+            max_turns=self.cfg.max_turns_build,
+            permission_mode="acceptEdits",
+        )
+        item.cost_usd += result.cost_usd
+        if not result.ok:
+            return False, f"{where}; build agent failed: {result.error}"
+        self.store.write(item, "build-summary.md", result.text.strip() + "\n")
+        message = CHANGE_BUILD_COMMIT.replace("{slug}", item.slug).replace("{kind}", item.kind)
+        committed = commit_all(app, message)
+        return True, f"{where}; built by agent (${result.cost_usd:.2f}), {len(committed)} file(s) changed"
+
+    def merge(self, item: WorkItem, role: str, by: str = "") -> WorkItem:
+        """IT merges an approved change into the app's base branch (fast-forward only).
+
+        This is the human's explicit act: the factory itself never merges. A new app has nothing to merge."""
+        if role != "it":
+            raise FactoryError("only IT merges: the factory never merges on its own")
+        if item.kind == "app":
+            raise FactoryError("only a change to an existing app is merged; a new app is delivered as built")
+        if item.merged:
+            raise FactoryError(f"'{item.slug}' is already merged")
+        if item.stage != "shipped":
+            raise FactoryError(f"'{item.slug}' is not approved yet (it is at stage '{item.stage}')")
+        try:
+            tip = merge_fast_forward(self.app_dir(item), item.slug)
+        except ProjectError as e:
+            raise FactoryError(str(e)) from e
+        item.merged = True
+        item.log("merged", f"IT {by}: {item.base_branch} is now at {tip[:8]}".replace("  ", " "))
+        self.store.save(item)
+        return item
+
+    def abandon(self, item: WorkItem, role: str, reason: str, by: str = "") -> WorkItem:
+        """Drop a change nobody wants anymore, freeing the app for the next one (never a merged change)."""
+        if role not in ("it", "owner"):
+            raise FactoryError("only IT or the owner abandons a change")
+        if item.kind == "app":
+            raise FactoryError("only a change to an existing app can be abandoned")
+        if item.merged:
+            raise FactoryError(f"'{item.slug}' is already merged: revert it with a new change instead")
+        if not reason.strip():
+            raise FactoryError("abandoning needs a reason (it stays in the history)")
+        try:
+            abandon_change(self.app_dir(item), item.slug)
+        except ProjectError as e:
+            raise FactoryError(str(e)) from e
+        item.status = "abandoned"
+        item.log("abandoned", f"{role} {by}: {reason}".replace("  ", " "))
+        self.store.save(item)
+        return item
+
     def _do_build(self, item: WorkItem) -> tuple[bool, str]:
+        if item.kind != "app":
+            return self._do_build_change(item)
         app = self.app_dir(item)
         detail = self._scaffold(item, app)
         # The triplet travels with the app (Claudo layout: work/<feature>/).

@@ -124,17 +124,18 @@ def test_an_it_exception_keeps_an_app_compliant_until_it_is_removed(foreman, tmp
     assert scan_drift([item], hold, foreman.cfg.apps_dir)[0] != []
 
 
-def test_migration_items_are_opened_once_and_never_executed(foreman, tmp_path):
+def test_a_migration_is_opened_once_and_runs_on_the_target_app_not_a_new_one(foreman, tmp_path):
     item = ship(foreman)
     new, _ = radar_with(tmp_path, {"fastapi": "hold"})
     drifted, _ = scan_drift(foreman.store.all(), new, foreman.cfg.apps_dir)
     foreman.radar = new
     mig = foreman.open_migration(drifted[0])
     assert mig.kind == "migration" and mig.target == item.slug and mig.requester == "radar-drift"
-    assert mig.status == "blocked" and "tracked only" in mig.feedback and "FastAPI" in mig.idea
-    assert foreman.open_migration(drifted[0]) is None  # idempotent: already tracked
-    again = foreman.run(foreman.store.load(mig.slug))  # `run` must not scaffold a second, unrelated app
-    assert again.status == "blocked" and not (foreman.cfg.apps_dir / mig.slug).exists()
+    assert mig.status == "active" and mig.maturity == item.maturity and "FastAPI" in mig.idea
+    assert foreman.open_migration(drifted[0]) is None  # idempotent: a change is already open for that app
+    ran = foreman.run(foreman.store.load(mig.slug))
+    assert (ran.stage, ran.status) == ("spec_review", "waiting")  # a real, governed pipeline
+    assert not (foreman.cfg.apps_dir / mig.slug).exists()  # it works on the existing app's folder
     assert (foreman.store.dir(mig.slug) / "idea.md").is_file()
 
 
@@ -183,7 +184,16 @@ def test_cli_drift_is_clean_then_fails_after_a_radar_change_and_can_open_a_migra
     out = capsys.readouterr().out
     assert "0 compliant, 1 drifted" in out and "orders" in out and "FastAPI" in out
     assert main(["drift", "--open"]) == 1 and "migration item: migrate-orders" in capsys.readouterr().out
-    assert main(["drift", "--open"]) == 1 and "migration already tracked" in capsys.readouterr().out
+    # With the migration open, the app is "in flight": not judged again, but the check must NOT go green,
+    # because the violation is still there until the migration is merged.
+    assert main(["drift"]) == 1
+    out = capsys.readouterr().out
+    assert (
+        "1 app(s) with a change in flight" in out
+        and "migration pending: migrate-orders-to-the-current-radar (for orders)" in out
+    )
+    assert main(["drift", "--open"]) == 1  # nothing new to open: no duplicate migration
+    assert "migration item" not in capsys.readouterr().out
     assert main(["board"]) == 0 and "migrate-orders" in capsys.readouterr().out
 
 

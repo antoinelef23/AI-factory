@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from factory.radar import ALLOW, APPROVAL, BLOCK, Radar, Tech, verdict
 
@@ -153,4 +154,136 @@ def render_design(
             lines.append(f"- **ADR-{i}**: use {t.name} ({t.ring} ring) at {maturity}; pending IT approval.")
     else:
         lines.append("- **ADR-1**: stack fully within the adopted ring; no exception requested.")
+    return "\n".join(lines) + "\n"
+
+
+# ------------------------------------------------------------------ changes to an existing app
+
+CHANGE_KINDS = ("feature", "bug", "migration")
+
+
+@dataclass
+class ExistingStack:
+    """What an existing app really uses, read from its manifests, images and imports."""
+
+    techs: list[Tech] = field(default_factory=list)  # on the radar, in first-seen order
+    unknown: list[str] = field(default_factory=list)  # declared dependencies the radar does not know
+    declared: list[str] = field(default_factory=list)  # every dependency name its manifests declare
+
+
+def existing_stack(app: Path, radar: Radar) -> ExistingStack:
+    from factory.detect import scan_project
+
+    stack = ExistingStack()
+    seen: set[str] = set()
+    for f in scan_project(app):
+        tech = radar.find(f.name)
+        if f.kind == "manifest" and f.name not in stack.declared:
+            stack.declared.append(f.name)
+        if tech is not None:
+            if tech.id not in seen:
+                seen.add(tech.id)
+                stack.techs.append(tech)
+        elif f.kind == "manifest" and f.name not in stack.unknown:
+            stack.unknown.append(f.name)
+    return stack
+
+
+def render_change_design(
+    *,
+    slug: str,
+    title: str,
+    kind: str,
+    target: str,
+    maturity: str,
+    radar: Radar,
+    existing: ExistingStack,
+    gates: list[str],
+    spec_version: str,
+) -> str:
+    """design.md of a change: the app's EXISTING stack judged by the CURRENT radar.
+
+    Nothing is chosen: the stack already exists. The design says what to keep, what needs IT's approval and
+    what to migrate away from, and forbids adding anything the radar does not already allow."""
+    keep, approval, blocked = [], [], []
+    for t in existing.techs:
+        {ALLOW: keep, APPROVAL: approval, BLOCK: blocked}[verdict(t, maturity)].append(t)
+    lines = [
+        "---",
+        "type: design",
+        f"feature: {slug}",
+        "version: 0.1.0",
+        "status: draft",
+        "generated_by: radar-compiler",
+        f"change: {kind} of {target}",
+        f"maturity: {maturity}",
+        f"radar: {radar.company} {radar.version}".rstrip(),
+        f"spec: ./spec.md          # version: {spec_version}",
+        "---",
+        "",
+        # The title of a migration names what it removes ("Drop pydantic"): that is not a use of it.
+        "<!-- radar:ignore -->",
+        f"# Design: {title}",
+        "<!-- /radar:ignore -->",
+        "",
+        f"> A {kind} to the EXISTING app `{target}`. Nothing is chosen: the stack below is what the app",
+        "> already uses, judged by the current tech radar. Agents MUST NOT add a technology not listed here.",
+        "",
+        "## 1. Overview",
+        "",
+        f"Change kind: **{kind}**. The change runs on branch `factory/{slug}`; merging is IT's act.",
+        "",
+        "## 2. Existing stack (kept)",
+        "",
+        "| Technology | Ring | Verdict at this maturity |",
+        "|---|---|---|",
+    ]
+    lines += [f"| {t.name} | {t.ring} | allowed |" for t in keep] or ["| - | - | nothing on the radar |"]
+    if approval:
+        lines += ["", "## 3. Needs IT approval at this maturity", ""]
+        lines += [f"- {t.name} ({t.ring})" for t in approval]
+    else:
+        lines += ["", "## 3. Needs IT approval at this maturity", "", "Nothing."]
+    # A dependency the radar now blocks is being migrated away from: it is NOT pre-approved (and naming it
+    # here would make the design fail its own radar check); it is listed under "To migrate away from".
+    existing_deps = [
+        d for d in existing.declared if (t := radar.find(d)) is None or verdict(t, maturity) != BLOCK
+    ]
+    lines += ["", "### Existing dependencies (pre-approved: the app shipped with them)", ""]
+    lines += (
+        ["| Dependency |", "|---|", *(f"| {d} |" for d in existing_deps)]
+        if existing_deps
+        else ["None declared."]
+    )
+    lines += ["", "Any check on dependencies (evals, lint) MUST allow these."]
+    lines += ["", "## 4. Tech radar constraints", ""]
+    if existing.unknown:
+        lines += [f"Declared but unknown to the radar (ask IT to assess): {', '.join(existing.unknown)}.", ""]
+    lines.append("<!-- radar:ignore -->")
+    if blocked:
+        lines.append("To migrate away from (the radar no longer allows them at this maturity):")
+        for t in blocked:
+            alt = radar.get(t.replaced_by) if t.replaced_by else None
+            lines.append(f"- {t.name} ({t.ring}) -> {alt.name if alt else 'no alternative: ask IT'}")
+    else:
+        lines.append("Nothing to migrate away from.")
+    forbidden = [t for t in radar.techs if verdict(t, maturity) == BLOCK]
+    lines.append(f"Forbidden at {maturity}: " + (", ".join(t.name for t in forbidden) or "none") + ".")
+    lines.append("<!-- /radar:ignore -->")
+    lines += [
+        "",
+        "## 5. Rules of the change",
+        "",
+        "- Existing behavior MUST NOT change except as the spec says; the existing test suite stays green.",
+        "- Keep the diff minimal: touch only what the change needs.",
+        "- Add no dependency; use only the technologies of section 2.",
+    ]
+    if blocked:
+        lines.append("- Remove every technology listed under 'To migrate away from' and use its alternative.")
+    lines += [
+        "",
+        "## 6. Gates at this maturity",
+        "",
+        ", ".join(gates) + ". No green gate, no ship. IT merges.",
+    ]
     return "\n".join(lines) + "\n"

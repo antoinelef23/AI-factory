@@ -163,3 +163,27 @@ def test_non_ambiguous_hold_technologies_still_match_in_prose(radar):
 
 def test_the_radar_file_marks_only_requests_as_strict(radar):
     assert [t.id for t in radar.techs if t.text_strict] == ["requests"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Remove pydantic from pyproject and the code.",
+        "Drop Flask, then verify the suite is green.",
+        "Delete the MongoDB client module.",
+        "Migrate away from Requests: use HTTPX.",
+        "Migrate off Flask.",
+        "Phase out the legacy Flask blueprints.",
+        "Uninstall Requests from the environment.",
+        "Eliminate every MongoDB call.",
+        "Get rid of Flask.",
+    ],
+)
+def test_a_migration_plan_that_removes_a_forbidden_technology_is_not_using_it(radar, line):
+    """Regression: a migration's whole job is to name the technology it removes."""
+    assert plan_radar_errors(plan(t1=line), radar, "prod") == []
+
+
+def test_using_a_forbidden_technology_is_still_caught_next_to_removal_words_in_other_lines(radar):
+    text = plan(t1="Remove the old driver.\nStore the data in MongoDB.")
+    assert [e.split(":")[0] for e in plan_radar_errors(text, radar, "poc")] == ["T1"]

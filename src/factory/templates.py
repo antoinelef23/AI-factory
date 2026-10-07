@@ -171,7 +171,11 @@ PLAN_FORMAT = """EXACT FORMAT (a parser reads it; any deviation makes the plan u
 
 
 def plan_prompt(
-    item: WorkItem, feedback: str, spec_ids: list[str] | None = None, scaffolded: list[str] | None = None
+    item: WorkItem,
+    feedback: str,
+    spec_ids: list[str] | None = None,
+    scaffolded: list[str] | None = None,
+    change_of: str | None = None,
 ) -> str:
     fb = f"\nThe owner rejected the previous plan. Their feedback:\n{feedback}\n" if feedback else ""
     ids = f"\nSpec IDs you may reference in `implements`: {', '.join(spec_ids)}.\n" if spec_ids else ""
@@ -182,9 +186,14 @@ def plan_prompt(
         if scaffolded
         else ""
     )
+    where = (
+        f"THE APP `{change_of}` ALREADY EXISTS: this plan CHANGES it (a {item.kind}); it never recreates it."
+        if change_of
+        else "THE APP IS ALREADY SCAFFOLDED from the golden path before any task runs."
+    )
     return f"""You are the planner of a governed AI software factory.
 Read spec.md and design.md in the current directory. Write tasks.md: the execution plan.
-THE APP IS ALREADY SCAFFOLDED from the golden path before any task runs.{files}
+{where}{files}
 Never plan a scaffolding/setup task and never ask to recreate, empty or replace those files: a task that
 does so only burns time and breaks working code. T1 already starts from a running app.
 Rules: small tasks; tests before code; use ONLY the stack in design.md section 3; every BHV and INV of
@@ -212,4 +221,161 @@ HARD RULES (enforced by gates after you finish; violations block shipping):
 - Keep the golden-path structure, pyproject.toml layout and .github/ untouched unless a task says so.
 - Never edit files under work/ (the spec is immutable during the build).{fb}
 Finish with a 5-line summary of what you built.
+"""
+
+
+# ------------------------------------------------------------------ changes to an existing app
+
+
+def offline_change_spec(item: WorkItem) -> str:
+    """spec.md of a change: only the delta, plus the non-regression contract (offline, lint-clean)."""
+    return f"""---
+type: spec
+feature: {item.slug}
+version: 0.1.0
+status: draft
+owner: {item.requester}
+validated_by:
+---
+
+# Spec: {item.title}
+
+> The WHAT of a {item.kind} to the existing app `{item.target}`. Only the delta is specified.
+
+## 1. Intent
+
+{item.idea.strip()}
+
+**Target KPI:** to be set by the business at spec review.
+
+## 2. Glossary
+
+| Business term | Canonical name (code) | Definition |
+|---|---|---|
+| {item.title} | `{item.slug.replace("-", "_")}` | the {item.kind} described in the intent |
+
+## 3. Invariants
+
+- **INV-1**: The app MUST only use technologies the company tech radar allows at maturity `{item.maturity}`.
+- **INV-2**: The app MUST NOT contain secrets in its source code.
+- **INV-3**: Existing behavior MUST NOT change except as BHV-2 states; the existing test suite stays green.
+
+## 4. Behaviors
+
+### BHV-1: no regression
+- **Given** the app as it was before this change
+- **When** its existing test suite runs after the change
+- **Then** every test that passed before still passes
+
+### BHV-2: the change
+- **Given** the app after the change
+- **When** the situation described in the intent occurs
+- **Then** the outcome described in the intent is observable
+
+## 5. Examples
+
+### EX-1: the existing suite
+```yaml
+input:
+  command: the app's test suite
+expected_output:
+  result: all previously passing tests still pass
+covers: [BHV-1, INV-3]
+```
+
+## 6. Non-goals
+
+- **NG-1**: Anything not stated in the intent above, and any refactoring beyond what the change needs.
+
+## 7. Evals: merge gate
+
+| ID | Type | Description | Covers | Success threshold |
+|---|---|---|---|---|
+| EVAL-1 | deterministic | the pre-existing test suite still passes | BHV-1, INV-3 | 100% |
+| EVAL-2 | deterministic | radar gate passes at `{item.maturity}` | INV-1 | 100% |
+| EVAL-3 | deterministic | secrets gate passes | INV-2 | 100% |
+| EVAL-4 | deterministic | a test proves the change of the intent | BHV-2 | 100% |
+"""
+
+
+def offline_change_tasks(item: WorkItem) -> str:
+    return f"""---
+type: tasks
+feature: {item.slug}
+version: 0.1.0
+status: proposed
+generated_by: planner (offline)
+spec: ./spec.md          # version: 0.1.0
+design: ./design.md      # version: 0.1.0
+---
+
+# Tasks — {item.title}
+
+### T1 — Make the change
+- **depends_on :** []
+- **implements :** [BHV-2, INV-1, INV-3]
+- **files_touched :** `app/`, `tests/`
+- **verify :** `uv run pytest -q`
+- **done_when :** the change of spec.md section 1 works and the whole existing suite still passes.
+- **prompt :**
+  > The app `{item.target}` already exists: change it minimally, never recreate it.
+  > Use ONLY the technologies of design.md section 2. Write the test of the change first (BHV-2).
+
+### T2 — Evals and gates
+- **depends_on :** [T1]
+- **implements :** [BHV-1, INV-2, EVAL-1, EVAL-2, EVAL-3, EVAL-4]
+- **files_touched :** `tests/`
+- **verify :** `uv run pytest -q`
+- **done_when :** every eval of spec.md section 7 passes at maturity `{item.maturity}`.
+- **prompt :**
+  > Make every eval of spec.md section 7 an executable test named `test_eval_<n>_...` marked
+  > `@pytest.mark.eval`. Only touch app code to fix a defect.
+
+### CP-1 — Ship review (IT merges)
+- **trigger :** auto when [T2] done
+- **mode :** blocking
+"""
+
+
+def change_spec_prompt(item: WorkItem, feedback: str, existing_spec: str) -> str:
+    fb = f"\nThe business rejected the previous draft. Their feedback:\n{feedback}\n" if feedback else ""
+    known = (
+        "\nThe app's EXISTING spec (context only: do not restate it):\n"
+        f"<existing-spec>\n{existing_spec.strip()}\n</existing-spec>\n"
+        if existing_spec.strip()
+        else "\n(The app has no recorded spec: infer nothing about it beyond what idea.md says.)\n"
+    )
+    return f"""You are the spec writer of a governed AI software factory.
+Read idea.md in the current directory. It asks for a {item.kind} to the EXISTING app `{item.target}`.
+Write spec.md for the CHANGE only: its delta, never the app as a whole.{known}
+Rules: every statement testable with a stable ID (INV-n, BHV-n, EX-n, EVAL-n); no vague words without
+numbers; realistic examples; explicit non-goals; one eval per BHV/INV. Always include
+INV-1 = only technologies allowed by the company tech radar at maturity `{item.maturity}`,
+INV-3 = existing behavior does not change except as the spec states and the existing tests stay green, and
+BHV-1 = no regression (the existing test suite still passes). Do not choose technologies.{fb}
+Output ONLY the markdown of spec.md (frontmatter first: type: spec, feature: {item.slug},
+version: 0.1.0, status: draft), no commentary, no code fence.
+
+Sections: 1. Intent (+ Target KPI), 2. Glossary, 3. Invariants, 4. Behaviors (Given/When/Then),
+5. Examples (yaml), 6. Non-goals, 7. Evals (table: ID, Type, Description, Covers, Success threshold).
+"""
+
+
+def change_build_prompt(item: WorkItem, forbidden: list[str], feedback: str) -> str:
+    fb = f"\nA previous attempt failed the factory gates. Fix these first:\n{feedback}\n" if feedback else ""
+    return f"""You are the implementer of a governed AI software factory.
+The current directory is the EXISTING app `{item.target}`, on branch `factory/{item.slug}`.
+Read work/{item.slug}/spec.md, design.md and tasks.md (in that order), then make the {item.kind}
+they describe.
+
+HARD RULES (enforced by gates after you finish; violations block shipping):
+- Make the MINIMAL change: the existing behavior and every existing test must keep working.
+- Use ONLY the technologies of design.md section 2. Never add a dependency.
+- Forbidden at maturity `{item.maturity}`: {", ".join(forbidden) or "none"}.
+- If design.md lists technologies to migrate away from, replace each one and remove it from the manifests
+  and the code, using the alternative it names.
+- No secrets in code; configuration from environment variables.
+- Write pytest tests for the change and run `uv run pytest -q` until green.
+- Never edit files under work/ (the spec is immutable during the build).{fb}
+Finish with a 5-line summary of what you changed.
 """

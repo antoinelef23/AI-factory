@@ -137,6 +137,8 @@ def test_drift_flags_an_app_once_its_exception_lapses_and_renewal_cures_it(forem
     item = ship_mvp_with_django(foreman)
     assert item.status == "shipped"
     apps = foreman.cfg.apps_dir
+    # Drift judges what the app USES, not its design prose: the app really depends on Django.
+    (apps / item.slug / "requirements.txt").write_text("django>=5\n", encoding="utf-8")
     assert scan_drift([item], foreman.radar, apps, today=TODAY + timedelta(days=100))[0] == []
     later = TODAY + timedelta(days=200)
     drifted, _ = scan_drift([item], foreman.radar, apps, today=later)
