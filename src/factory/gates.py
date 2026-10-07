@@ -114,10 +114,14 @@ def run_gates(
     docs: list[Path],
     commands: dict[str, str],
     executor: Executor = shell_executor,
+    extra: dict[str, Callable[[], GateResult]] | None = None,
 ) -> list[GateResult]:
+    """`extra` holds gates only the foreman can evaluate (they need the work item or the engine)."""
     results: list[GateResult] = []
     for gate in gates:
-        if gate == "radar":
+        if extra and gate in extra:
+            results.append(extra[gate]())
+        elif gate == "radar":
             results.append(radar_gate(app_dir, radar, maturity, exceptions, docs))
         elif gate == "secrets":
             results.append(secrets_gate(app_dir))

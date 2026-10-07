@@ -7,6 +7,7 @@ reason in `feedback`, which the next attempt receives.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from factory.agents import BUILD_TOOLS, READ_ONLY_TOOLS, ClaudeRunner, strip_fen
 from factory.claudo import ClaudoEngine, EngineError, LintResult, load_or_create_secret
 from factory.config import Config
 from factory.design import choose_stack, detect_capabilities, render_design
-from factory.gates import Executor, format_report, run_gates, shell_executor
+from factory.gates import Executor, GateResult, format_report, run_gates, shell_executor
 from factory.guard import check_project
 from factory.judge import judge
 from factory.project import prepare_project
@@ -117,6 +118,7 @@ class Foreman:
         nxt = STEPS[idx + 1]
         if nxt.name == "design_review" and item.skip_design_review:
             item.log("skipped", "design_review: stack fully adopted at this maturity")
+            self._record_hash(item, "design.md")  # no human review: the compiled design is the approved one
             nxt = STEPS[idx + 2]
         item.stage = nxt.name
         item.status = "active"
@@ -135,6 +137,10 @@ class Foreman:
         if item.stage == "design_review":
             pending = self._design_report(item).needs_approval()
             item.it_exceptions = sorted(set(item.it_exceptions) | {v.key for v in pending})
+        if item.stage == "spec_review":
+            self._record_hash(item, "spec.md")  # the business contract, frozen at its approval
+        if item.stage == "design_review":
+            self._record_hash(item, "design.md")
         if item.stage == "plan_review":
             self._mark_plan_approved(item, by)
         if item.stage == "ship_review" and item.claudo_cp:
@@ -524,6 +530,44 @@ class Foreman:
         item.claudo_cp = ""
         return True, "approved"
 
+    @staticmethod
+    def _sha(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _record_hash(self, item: WorkItem, name: str) -> None:
+        item.approved_hashes[name] = self._sha(self.store.read(item, name))
+
+    def _immutability_gate(self, item: WorkItem) -> GateResult:
+        """spec.md and design.md must be byte-for-byte what a human approved. "Never edit the spec during a
+        build" was only a prompt rule: an agent that weakens an eval in its own copy would pass every other
+        gate. This makes the rule mechanical, for the store's copy and for the copy inside the app."""
+        copies = self.app_dir(item) / "work" / item.slug
+        problems = []
+        for name in ("spec.md", "design.md"):
+            approved = item.approved_hashes.get(name)
+            if not approved:
+                continue  # item approved before hashes were recorded: nothing to compare against
+            if self._sha(self.store.read(item, name)) != approved:
+                problems.append(
+                    f"{name}: changed in work/{item.slug}/ after its approval; amend it through the review "
+                    "checkpoint (reject, regenerate, approve again)"
+                )
+            copy = copies / name
+            if not copy.is_file():
+                problems.append(f"{name}: missing from the app (work/{item.slug}/{name})")
+            elif self._sha(copy.read_text(encoding="utf-8")) != approved:
+                problems.append(
+                    f"{name}: modified inside the app during the build; agents never edit the contract"
+                )
+        detail = "\n".join(problems) or "spec.md and design.md are as approved"
+        return GateResult("immutable", not problems, detail)
+
+    def _trajectory_gate(self, item: WorkItem) -> GateResult:
+        if self.engine is None or not item.claudo_cp:
+            return GateResult("trajectory", True, "not applicable: this item was not built through Claudo")
+        ok, out = self.engine.trajectory(self.app_dir(item), item.slug)
+        return GateResult("trajectory", ok, out or "ok")
+
     def _do_gate(self, item: WorkItem) -> tuple[bool, str]:
         app = self.app_dir(item)
         results = run_gates(
@@ -535,6 +579,10 @@ class Foreman:
             docs=[app / "work" / item.slug / "design.md"],
             commands=self.cfg.gate_commands,
             executor=self.executor,
+            extra={
+                "immutable": lambda: self._immutability_gate(item),
+                "trajectory": lambda: self._trajectory_gate(item),
+            },
         )
         self.store.write(item, "gate-report.md", format_report(results, item.maturity))
         failed = [r for r in results if not r.ok]

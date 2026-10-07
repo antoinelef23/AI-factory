@@ -37,10 +37,12 @@ budget_usd = 0                    # spend cap per orchestrator run (LAB_BUDGET_U
 
 # Gates per maturity rung. The higher the rung, the stricter the factory.
 [gates]
-pov = ["radar", "secrets"]
-poc = ["radar", "secrets", "tests"]
-mvp = ["radar", "secrets", "tests", "lint"]
-prod = ["radar", "secrets", "tests", "lint"]
+# immutable  = spec.md / design.md are exactly what was approved (agents never edit the contract)
+# trajectory = HOW a Claudo build went (journal + git scope), only for items built through Claudo
+pov = ["radar", "secrets", "immutable"]
+poc = ["radar", "secrets", "immutable", "tests"]
+mvp = ["radar", "secrets", "immutable", "tests", "lint", "trajectory"]
+prod = ["radar", "secrets", "immutable", "tests", "lint", "trajectory"]
 
 # Shell commands for command-based gates, run inside the app folder.
 [gates.commands]

@@ -133,12 +133,10 @@ def test_cli_full_offline_flow(factory_root, capsys, monkeypatch):
     monkeypatch.setenv("AI_FACTORY_ROOT", str(factory_root))
     # Avoid running uv inside tests: drop the command gate for poc.
     toml = factory_root / "factory.toml"
-    toml.write_text(
-        toml.read_text(encoding="utf-8").replace(
-            'poc = ["radar", "secrets", "tests"]', 'poc = ["radar", "secrets"]'
-        ),
-        encoding="utf-8",
-    )
+    text = toml.read_text(encoding="utf-8")
+    poc_line = next(ln for ln in text.splitlines() if ln.startswith("poc = ["))
+    assert '"tests"' in poc_line  # the test must really drop something, not silently match nothing
+    toml.write_text(text.replace(poc_line, poc_line.replace(', "tests"', "")), encoding="utf-8")
     assert (
         main(["intake", "Expense tracker", "--idea", "an api to record expenses", "--maturity", "poc"]) == 0
     )

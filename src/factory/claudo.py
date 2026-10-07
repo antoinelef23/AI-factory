@@ -208,6 +208,23 @@ class ClaudoEngine:
             raise EngineError(f"signing {cp} failed: {(p.stderr or p.stdout).strip()[-300:]}")
         return feature / ".approvals" / cp
 
+    def trajectory(self, project: Path, slug: str, timeout: int = 60) -> tuple[bool, str]:
+        """Claudo's trajectory guard: not WHAT the build produced but HOW it got there (a `task_done`
+        without a successful attempt = forged journal; a commit touching files outside the task's scope).
+        Returns (ok, output). Read-only; no journal means nothing to check."""
+        p = subprocess.run(
+            [self.python, str(self.home / "lab" / "engine" / "trajectory_guard.py"), f"work/{slug}"]
+            + ["--root", str(project)],
+            cwd=self.home,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env={**os.environ, "PYTHONUTF8": "1"},
+        )
+        return p.returncode == 0, (p.stdout + p.stderr).strip()
+
     @staticmethod
     def journal_cost(project: Path, slug: str) -> float:
         """Total model spend Claudo recorded for this feature (tolerant: a torn line or no journal is 0)."""

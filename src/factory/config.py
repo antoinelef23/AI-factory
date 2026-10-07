@@ -10,10 +10,10 @@ from pathlib import Path
 CONFIG_NAME = "factory.toml"
 
 DEFAULT_GATES = {
-    "pov": ["radar", "secrets"],
-    "poc": ["radar", "secrets", "tests"],
-    "mvp": ["radar", "secrets", "tests", "lint"],
-    "prod": ["radar", "secrets", "tests", "lint"],
+    "pov": ["radar", "secrets", "immutable"],
+    "poc": ["radar", "secrets", "immutable", "tests"],
+    "mvp": ["radar", "secrets", "immutable", "tests", "lint", "trajectory"],
+    "prod": ["radar", "secrets", "immutable", "tests", "lint", "trajectory"],
 }
 
 

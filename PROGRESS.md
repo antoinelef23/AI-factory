@@ -7,7 +7,7 @@ Plan: [ROADMAP.md](ROADMAP.md). Strategy: [PLANS.md](PLANS.md). How to run: [REA
 **Phase 0 complete. Phase 1 core complete** (P1-1, P1-3, P1-4, P1-6). Local git history only, **nothing pushed**.
 The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
-**Verification command:** `just check` (ruff check + format check + pytest). Last run: **151 passed**.
+**Verification command:** `just check` (ruff check + format check + pytest). Last run: **164 passed**.
 Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-ci` green on **Windows and Linux (WSL)**.
 
 ### Roadmap items done
@@ -20,7 +20,9 @@ Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-
 | P1-4 build through Claudo | done | live MVP item shipped: 3 tasks first attempt, 13 evals green, per-task commits |
 | P1-6 signed approvals | done | live: token `approved_by=Bob`, payload bound to CP-1, consumed by Claudo; secret in `.factory/`, outside the app |
 | P1-2 package engine | **replaced** | the factory *discovers* Claudo (config / `CLAUDO_HOME` / sibling) instead of vendoring it; decision D2 revised, no monorepo |
-| P1-5, P1-7, P1-8, P1-9, P1-10 | open | see Next |
+| P1-8 trajectory guard as gate | done | Claudo's `trajectory_guard.py` runs as an MVP+ gate; real guard tested on a forged journal |
+| P1-9 spec/design immutable | done (factory-side) | sha256 frozen at approval; gate fails if the store's or the app's copy differs; 4 tamper tests, mutation-checked |
+| P1-5, P1-7, P1-10 | open | see Next |
 
 ### Live runs and what they taught (all in scratch copies, not committed)
 
@@ -57,15 +59,11 @@ second review (needs a Claudo change).
 - Approval secret is held by the orchestrator process on the host, so a host agent with code execution could read it
   (Claudo's documented residual M4; the sandbox runner is the fix, ROADMAP P1-7).
 - Capability detection is keyword-based (idea with "list by employee and month" got no database in live1).
-- Spec/design immutability during a build is a prompt rule only: an agent could edit `work/<slug>/spec.md` inside the
-  app. Mechanical check is the next task.
 - Claudo's two Opus reviews dominate MVP cost (above).
 - Only one golden path (python-fastapi).
 
 ## Next steps (in order)
-1. **Spec/design immutability gate** (free, deterministic): hash spec/design at approval, fail the gate if the app's
-   copy or the store's copy changed.
-2. **Trajectory guard** as an MVP+ gate (Claudo's `trajectory_guard.py`: HOW the run happened, journal + git).
-3. P1-7 sandbox runner by default for MVP+ builds, then re-check the live path.
-4. Ask Antoine before spending more: a live run through the reject path (~$3-4) and `judge = true` end to end (~$0.5).
-5. Phase 2 (real delivery: git repo, PR, GitHub issue intake) needs decisions D3/D6 and a push go-ahead.
+1. P1-5: a technology forbidden by the radar inside a *plan* (task prompts, files) fails before any agent runs.
+2. P1-7: sandbox runner by default for MVP+ builds (Docker), then re-check the live path.
+3. Ask Antoine before spending more: a live run through the reject path (~$3-4) and `judge = true` end to end (~$0.5).
+4. Phase 2 (real delivery: git repo, PR, GitHub issue intake) needs decisions D3/D6 and a push go-ahead.
