@@ -9,9 +9,12 @@ factory.toml, then $CLAUDO_HOME, then a sibling checkout.
 from __future__ import annotations
 
 import os
+import re
+import secrets
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -72,6 +75,23 @@ def parse_lint_output(output: str, returncode: int) -> LintResult:
     return result
 
 
+CHECKPOINT_WAIT = re.compile(r"⏸\s+(CP-\d+)\s+—\s+waiting for")  # what orchestrate.py prints when it pauses
+
+
+@dataclass
+class BuildResult:
+    """Outcome of one orchestrator run: it either reached a human checkpoint, finished, or failed."""
+
+    outcome: str  # checkpoint | done | failed | timeout
+    checkpoint: str = ""  # e.g. CP-1 when outcome == "checkpoint"
+    log: str = ""
+    returncode: int | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.outcome in ("checkpoint", "done")
+
+
 class ClaudoEngine:
     def __init__(self, home: Path, python: str | None = None) -> None:
         if not is_claudo(home):
@@ -106,3 +126,118 @@ class ClaudoEngine:
             except subprocess.TimeoutExpired as e:
                 raise EngineError(f"plan-lint timed out after {timeout}s") from e
         return parse_lint_output(p.stdout + p.stderr, p.returncode)
+
+    def run_build(
+        self,
+        slug: str,
+        project: Path,
+        *,
+        stop_at_checkpoint: bool = True,
+        env: dict[str, str] | None = None,
+        timeout: int = 3600,
+    ) -> BuildResult:
+        """Run Claudo's orchestrator on `work/<slug>` of `project` (the app repo).
+
+        Claudo BLOCKS (polls) at a blocking checkpoint until a signed human approval appears. The factory's
+        process model is one short CLI call per human decision, so by default the orchestrator is stopped
+        the moment it announces the checkpoint: its state (`.runs/state.json`) is persisted, and a later
+        call resumes where it paused (finished tasks are skipped)."""
+        argv = [self.python, str(self.home / ENGINE_ENTRY), f"work/{slug}", "--project", str(project)]
+        proc = subprocess.Popen(
+            argv,
+            cwd=self.home,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "LAB_NO_NOTIFY": "1", "PYTHONUTF8": "1", **(env or {})},
+        )
+        timed_out = threading.Event()
+
+        def expire() -> None:
+            timed_out.set()
+            proc.kill()
+
+        watchdog = threading.Timer(timeout, expire)
+        watchdog.start()
+        lines: list[str] = []
+        checkpoint = ""
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                lines.append(line)
+                found = CHECKPOINT_WAIT.search(line)
+                if found and stop_at_checkpoint:
+                    checkpoint = found.group(1)
+                    _stop(proc)
+                    break
+            proc.wait()
+        finally:
+            watchdog.cancel()
+            if proc.poll() is None:
+                _stop(proc)
+        log = "".join(lines)
+        if timed_out.is_set():
+            return BuildResult("timeout", log=log, returncode=proc.returncode)
+        if checkpoint:
+            return BuildResult("checkpoint", checkpoint, log, proc.returncode)
+        return BuildResult("done" if proc.returncode == 0 else "failed", log=log, returncode=proc.returncode)
+
+    def sign_approval(self, project: Path, slug: str, cp: str, author: str, secret: str) -> Path:
+        """Write the HMAC-signed approval token the orchestrator waits for (Claudo's approvals.py, the same
+        code path as its approve.sh). The secret is passed to this one process only."""
+        feature = project / "work" / slug
+        p = subprocess.run(
+            [
+                self.python,
+                str(self.home / "lab" / "engine" / "approvals.py"),
+                "sign",
+                cp,
+                str(feature),
+                author,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "LAB_APPROVAL_SECRET": secret, "PYTHONUTF8": "1"},
+        )
+        if p.returncode != 0:
+            raise EngineError(f"signing {cp} failed: {(p.stderr or p.stdout).strip()[-300:]}")
+        return feature / ".approvals" / cp
+
+    @staticmethod
+    def reject_checkpoint(project: Path, slug: str, cp: str, reason: str, by: str) -> Path:
+        """Write `.approvals/<cp>.rejected` as Claudo's reject.sh does: the orchestrator reopens the
+        checkpoint's tasks and passes `reason` verbatim to the agents."""
+        d = project / "work" / slug / ".approvals"
+        d.mkdir(parents=True, exist_ok=True)
+        clean = " ".join(reason.split())  # one line: the file format is `key=value` per line
+        path = d / f"{cp}.rejected"
+        path.write_text(f"reason={clean}\nby={by}\n", encoding="utf-8", newline="\n")
+        return path
+
+
+def load_or_create_secret(path: Path) -> str:
+    """The factory's approval-signing secret: created once, kept outside every app (and git-ignored), so
+    agents working in an app folder neither hold it in their environment nor find it next to their code."""
+    if path.is_file() and path.read_text(encoding="utf-8").strip():
+        return path.read_text(encoding="utf-8").strip()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    secret = secrets.token_hex(32)
+    path.write_text(secret + "\n", encoding="utf-8", newline="\n")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass  # Windows: ACLs of the user profile apply
+    return secret
+
+
+def _stop(proc: subprocess.Popen) -> None:
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)

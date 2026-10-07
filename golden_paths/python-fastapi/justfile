@@ -1,0 +1,9 @@
+# Standard targets (IT golden path). Claudo's eval gate runs `just evals`.
+test:
+    uv run pytest -q
+
+evals:
+    uv run pytest -q -m eval
+
+lint:
+    uv run ruff check .

@@ -70,6 +70,8 @@ class WorkItem:
     cost_usd: float = 0.0
     judgements: dict = field(default_factory=dict)  # kind -> {verdict, average, summary}; advisory only
     build_attempts: int = 0  # total build runs, for telemetry (the retry budget is per `run`)
+    claudo_cp: str = ""  # human checkpoint Claudo is paused at (e.g. CP-1); "" = none pending
+    claudo_rejection: dict = field(default_factory=dict)  # {cp, reason, by}: IT rejected, rework pending
 
     @property
     def step(self) -> Step:
@@ -108,7 +110,7 @@ class Store:
         d = self.dir(item.slug)
         d.mkdir(parents=True, exist_ok=True)
         (d / "item.json").write_text(
-            json.dumps(item.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+            json.dumps(item.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n"
         )
 
     def load(self, slug: str) -> WorkItem:
@@ -126,7 +128,7 @@ class Store:
     def write(self, item: WorkItem, name: str, content: str) -> Path:
         path = self.dir(item.slug) / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        path.write_text(content, encoding="utf-8", newline="\n")  # LF on every OS: clean git diffs
         return path
 
     def read(self, item: WorkItem, name: str) -> str:

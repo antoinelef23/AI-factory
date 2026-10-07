@@ -76,6 +76,62 @@ def test_engine_requires_a_claudo_checkout(tmp_path):
         ClaudoEngine(tmp_path)
 
 
+FAKE_ORCH = """
+import os, sys, time
+mode = os.environ["FAKE_MODE"]
+print("Plan: 2 nodes", flush=True)
+print("▶ T1 (attempt 1/3)", flush=True)
+if mode == "checkpoint":
+    print("⏸  CP-1 — waiting for X/.approvals/CP-1 (or .rejected)", flush=True)
+    time.sleep(120)            # a real orchestrator polls forever here
+elif mode == "done":
+    print("✅ run complete")
+elif mode == "fail":
+    print("❌ T1 failed"); sys.exit(3)
+elif mode == "hang":
+    time.sleep(120)
+"""
+
+
+def fake_orch_home(tmp_path: Path) -> Path:
+    home = fake_claudo(tmp_path)
+    (home / "lab" / "engine" / "orchestrate.py").write_text(FAKE_ORCH, encoding="utf-8")
+    return home
+
+
+@pytest.mark.parametrize(
+    ("mode", "outcome", "cp"),
+    [("checkpoint", "checkpoint", "CP-1"), ("done", "done", ""), ("fail", "failed", "")],
+)
+def test_run_build_outcomes(tmp_path, mode, outcome, cp):
+    import time
+
+    t0 = time.monotonic()
+    r = ClaudoEngine(fake_orch_home(tmp_path / "c")).run_build(
+        "x", tmp_path / "proj", env={"FAKE_MODE": mode}
+    )
+    assert (r.outcome, r.checkpoint) == (outcome, cp)
+    assert "▶ T1" in r.log
+    assert r.ok == (outcome != "failed")
+    if mode == "checkpoint":
+        assert time.monotonic() - t0 < 60  # the orchestrator was stopped, not waited for (it sleeps 120 s)
+
+
+def test_run_build_can_wait_through_a_checkpoint_when_asked(tmp_path):
+    """stop_at_checkpoint=False keeps Claudo's own blocking behavior (until the timeout here)."""
+    r = ClaudoEngine(fake_orch_home(tmp_path / "c")).run_build(
+        "x", tmp_path / "p", stop_at_checkpoint=False, env={"FAKE_MODE": "checkpoint"}, timeout=2
+    )
+    assert r.outcome == "timeout" and "CP-1" in r.log
+
+
+def test_run_build_times_out_a_silent_orchestrator(tmp_path):
+    r = ClaudoEngine(fake_orch_home(tmp_path / "c")).run_build(
+        "x", tmp_path / "p", env={"FAKE_MODE": "hang"}, timeout=2
+    )
+    assert r.outcome == "timeout" and not r.ok
+
+
 def test_lint_plan_runs_the_engine_on_a_throwaway_project(tmp_path, monkeypatch):
     import factory.claudo as claudo
 

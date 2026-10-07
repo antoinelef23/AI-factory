@@ -34,6 +34,8 @@ class Config:
     max_build_attempts: int = 3
     claudo_home: str | None = None  # [engine] claudo; None = auto-discover (CLAUDO_HOME, sibling checkout)
     plan_lint_retries: int = 2  # [engine] plan_lint_retries: re-prompts with Claudo's lint errors
+    claudo_timeout: int = 3600  # [engine] build_timeout: seconds per orchestrator run
+    claudo_budget_usd: float = 0.0  # [engine] budget_usd: per-run spend cap passed to Claudo (0 = none)
     judge_enabled: bool = False
     judge_thinking_tokens: int | None = None  # None = model default (expensive); 0 disables thinking
     models: dict[str, str] = field(default_factory=dict)
@@ -82,6 +84,8 @@ def load_config(root: Path) -> Config:
         judge_thinking_tokens=agent.get("judge_thinking_tokens"),
         claudo_home=data.get("engine", {}).get("claudo") or None,
         plan_lint_retries=max(0, int(data.get("engine", {}).get("plan_lint_retries", 2))),
+        claudo_timeout=max(60, int(data.get("engine", {}).get("build_timeout", 3600))),
+        claudo_budget_usd=max(0.0, float(data.get("engine", {}).get("budget_usd", 0))),
         models=dict(agent.get("models", {})),
         gate_commands=dict(gates.get("commands", {})),
     )

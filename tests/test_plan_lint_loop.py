@@ -36,6 +36,11 @@ class FakeEngine:
             return LintResult(warnings=["T1: no executable verify"])
         return LintResult(errors=["no task recognized — check the format `### T1 — title`"])
 
+    def run_build(self, slug, project, **kw):  # only reached once the owner approved a plan
+        from factory.claudo import BuildResult
+
+        return BuildResult("checkpoint", "CP-1", "built")
+
 
 def to_plan(foreman, runner, engine):
     foreman.runner, foreman.engine = runner, engine

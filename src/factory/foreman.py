@@ -11,12 +11,13 @@ import shutil
 from pathlib import Path
 
 from factory.agents import BUILD_TOOLS, READ_ONLY_TOOLS, ClaudeRunner, strip_fences
-from factory.claudo import ClaudoEngine, LintResult
+from factory.claudo import ClaudoEngine, EngineError, LintResult, load_or_create_secret
 from factory.config import Config
 from factory.design import choose_stack, detect_capabilities, render_design
 from factory.gates import Executor, format_report, run_gates, shell_executor
 from factory.guard import check_project
 from factory.judge import judge
+from factory.project import prepare_project
 from factory.radar import BLOCK, MATURITIES, Radar, verdict
 from factory.templates import (
     SPEC_ID,
@@ -136,6 +137,13 @@ class Foreman:
             item.it_exceptions = sorted(set(item.it_exceptions) | {v.key for v in pending})
         if item.stage == "plan_review":
             self._mark_plan_approved(item, by)
+        if item.stage == "ship_review" and item.claudo_cp:
+            ok, detail = self._finalize_with_claudo(item, by or role)
+            if not ok:  # signing or the final orchestrator run failed: nothing ships
+                item.log("failed", detail[:600])
+                item.feedback, item.status = detail, "blocked"
+                self.store.save(item)
+                return item
         item.approvals.append({"stage": item.stage, "role": role, "by": by or role, "note": note})
         item.log("approved", f"{role} {by}".strip() + (f": {note}" if note else ""))
         item.feedback = ""
@@ -147,6 +155,8 @@ class Foreman:
         if not reason.strip():
             raise FactoryError("a rejection needs a reason (it is fed to the next attempt)")
         back = item.step.on_reject
+        if item.stage == "ship_review" and item.claudo_cp:  # Claudo reopens the checkpoint's tasks
+            item.claudo_rejection = {"cp": item.claudo_cp, "reason": reason, "by": by or role}
         item.log("rejected", f"{role} {by}".strip() + f": {reason}")
         item.feedback = reason
         item.stage = back
@@ -397,7 +407,7 @@ class Foreman:
                 text = path.read_text(encoding="utf-8")
                 for k, v in values.items():
                     text = text.replace(k, v)
-                dest.write_text(text, encoding="utf-8")
+                dest.write_text(text, encoding="utf-8", newline="\n")
             else:
                 shutil.copy2(path, dest)
         return f"scaffolded from golden_paths/{gp}"
@@ -411,9 +421,14 @@ class Foreman:
         for name in ("idea.md", "spec.md", "design.md", "tasks.md"):
             text = self.store.read(item, name)
             if text:
-                (triplet / name).write_text(text, encoding="utf-8")
+                (triplet / name).write_text(text, encoding="utf-8", newline="\n")
         if self.runner is None:
             return True, f"{detail}; offline build (scaffold only, no agent)"
+        # Claudo executes the approved plan task by task (DAG, per-task verify, evals, reviewer panel).
+        # After a clean Claudo run, a failed FACTORY gate (radar, secrets...) is a targeted fix for one
+        # agent below, not a replay of the whole plan; an IT rejection goes back through Claudo.
+        if self.engine is not None and (not item.claudo_cp or item.claudo_rejection):
+            return self._build_with_claudo(item, app, detail)
         forbidden = [t.name for t in self.radar.techs if verdict(t, item.maturity) == BLOCK]
         result = self.runner.run(
             build_prompt(item, forbidden, item.feedback),
@@ -428,6 +443,58 @@ class Foreman:
             return False, f"{detail}; build agent failed: {result.error}"
         self.store.write(item, "build-summary.md", result.text.strip() + "\n")
         return True, f"{detail}; built by agent (${result.cost_usd:.2f})"
+
+    def _signing_secret(self) -> str:
+        """Kept outside every app (and git-ignored), so agents neither inherit nor find it."""
+        return load_or_create_secret(self.cfg.root / ".factory" / "approval-secret")
+
+    def _claudo_env(self) -> dict[str, str]:
+        env = {"LAB_APPROVAL_SECRET": self._signing_secret()}
+        if self.cfg.claudo_budget_usd:
+            env["LAB_BUDGET_USD"] = str(self.cfg.claudo_budget_usd)
+        return env
+
+    def _build_with_claudo(self, item: WorkItem, app: Path, scaffold: str) -> tuple[bool, str]:
+        assert self.engine is not None
+        prepare_project(app)  # git repo + local identity + `evals` recipe: what the orchestrator needs
+        if item.claudo_rejection:  # IT said no at the ship review: Claudo reopens the tasks with the reason
+            rej = item.claudo_rejection
+            self.engine.reject_checkpoint(app, item.slug, rej["cp"], rej["reason"], rej["by"])
+            item.claudo_rejection = {}
+        res = self.engine.run_build(item.slug, app, env=self._claudo_env(), timeout=self.cfg.claudo_timeout)
+        self.store.write(item, "claudo-build.log", res.log[-30000:])
+        if res.outcome == "checkpoint":
+            item.claudo_cp = res.checkpoint
+            return True, f"{scaffold}; Claudo built the plan, paused at {res.checkpoint}"
+        if res.outcome == "done":
+            item.claudo_cp = ""
+            return True, f"{scaffold}; Claudo run complete"
+        return False, f"{scaffold}; Claudo build {res.outcome}:\n{res.log[-2500:]}"
+
+    def _finalize_with_claudo(self, item: WorkItem, by: str) -> tuple[bool, str]:
+        """IT approved the ship review: write the SIGNED approval Claudo is waiting for, let it finish.
+
+        The token is signed with a secret only the factory holds, and records WHO approved: an agent
+        cannot self-approve (Claudo discards an unsigned or forged token)."""
+        assert self.engine is not None
+        app = self.app_dir(item)
+        secret = self._signing_secret()
+        try:
+            self.engine.sign_approval(app, item.slug, item.claudo_cp, by, secret)
+        except EngineError as e:
+            return False, str(e)
+        res = self.engine.run_build(
+            item.slug,
+            app,
+            stop_at_checkpoint=False,
+            env=self._claudo_env(),
+            timeout=self.cfg.claudo_timeout,
+        )
+        self.store.write(item, "claudo-final.log", res.log[-30000:])
+        if res.outcome != "done":
+            return False, f"Claudo did not complete after approval ({res.outcome}):\n{res.log[-2500:]}"
+        item.claudo_cp = ""
+        return True, "approved"
 
     def _do_gate(self, item: WorkItem) -> tuple[bool, str]:
         app = self.app_dir(item)
