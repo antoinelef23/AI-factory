@@ -17,9 +17,13 @@ class ScriptedClaudo:
             outcomes or [BuildResult("checkpoint", "CP-1", "T1 done\n⏸  CP-1 — waiting for x")]
         )
         self.runs, self.signed, self.rejected, self.sign_error = [], [], [], sign_error
+        self.journal_total = 0.0
 
     def lint_plan(self, slug, **kw):
         return LintResult()
+
+    def journal_cost(self, project, slug):
+        return self.journal_total
 
     def run_build(self, slug, project, *, stop_at_checkpoint=True, env=None, timeout=3600):
         self.runs.append(
@@ -53,6 +57,7 @@ class PlanThenBuildAgent(FakeAgentRunner):
 
 def at_ship_review(foreman, engine, agent=None):
     foreman.runner, foreman.engine = agent or PlanThenBuildAgent(), engine
+    foreman.cfg.claudo_build_from = "poc"  # these tests exercise the Claudo path at the lowest rung
     item = foreman.run(foreman.intake("X", "an api", "poc"))
     item = foreman.approve(item, "business")
     return foreman.approve(item, "owner", by="antoine")
@@ -188,3 +193,74 @@ def test_reject_checkpoint_writes_a_single_line_reason(tmp_path, reason):
     lines = path.read_text(encoding="utf-8").splitlines()
     assert lines[0].startswith("reason=") and lines[1] == "by=bob" and len(lines) == 2
     assert "\n" not in lines[0]
+
+
+# ------------------------------------------------------------------ maturity gating and cost
+
+
+@pytest.mark.parametrize(
+    ("maturity", "build_from", "claudo"),
+    [
+        ("poc", "mvp", False),
+        ("pov", "mvp", False),
+        ("mvp", "mvp", True),
+        ("prod", "mvp", True),
+        ("poc", "poc", True),
+    ],
+)
+def test_claudo_builds_only_from_the_configured_maturity(foreman, maturity, build_from, claudo):
+    engine = ScriptedClaudo()
+    foreman.runner, foreman.engine = PlanThenBuildAgent(), engine
+    foreman.cfg.claudo_build_from = build_from
+    item = foreman.run(foreman.intake("X", "an api", maturity))
+    item = foreman.approve(item, "business")
+    if item.stage == "design_review":  # MVP and above: IT always reviews the design
+        item = foreman.approve(item, "it")
+    item = foreman.approve(item, "owner")
+    assert bool(engine.runs) is claudo
+    assert (item.claudo_cp == "CP-1") is claudo
+    assert item.stage == "ship_review"  # either way the factory gates ran and IT decides
+
+
+def test_default_config_builds_poc_with_the_single_agent(factory_root):
+    from factory.config import load_config
+
+    assert load_config(factory_root).claudo_build_from == "mvp"
+
+
+def test_build_from_must_be_a_maturity(factory_root):
+    from factory.config import ConfigError, load_config
+
+    toml = factory_root / "factory.toml"
+    toml.write_text(
+        toml.read_text(encoding="utf-8").replace('build_from = "mvp"', 'build_from = "pilot"'),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="build_from"):
+        load_config(factory_root)
+
+
+def test_claudo_spend_is_added_once_from_its_journal(foreman):
+    engine = ScriptedClaudo([BuildResult("checkpoint", "CP-1", "x"), BuildResult("done", log="ok")])
+    engine.journal_total = 2.0
+    foreman.runner, foreman.engine = PlanThenBuildAgent(), engine
+    foreman.cfg.claudo_build_from = "poc"
+    item = foreman.run(foreman.intake("X", "an api", "poc"))
+    item = foreman.approve(foreman.approve(item, "business"), "owner")
+    agents_only = item.cost_usd - 2.0
+    assert item.claudo_cost_seen == 2.0 and agents_only > 0
+    engine.journal_total = 2.5  # the final run (review after approval) spent 0.5 more
+    item = foreman.approve(item, "it", by="bob")
+    assert item.cost_usd == pytest.approx(agents_only + 2.5) and item.claudo_cost_seen == 2.5
+
+
+def test_journal_cost_sums_costs_and_tolerates_junk(tmp_path):
+    runs = tmp_path / "work" / "x" / ".runs"
+    runs.mkdir(parents=True)
+    (runs / "journal.jsonl").write_text(
+        '{"event": "task_attempt", "cost_usd": 1.25}\n{"event": "eval_fail"}\nnot json\n'
+        '{"event": "review", "cost_usd": 0.75}\n{"cost_usd": null}\n[1, 2]\n',
+        encoding="utf-8",
+    )
+    assert ClaudoEngine.journal_cost(tmp_path, "x") == pytest.approx(2.0)
+    assert ClaudoEngine.journal_cost(tmp_path, "missing") == 0.0

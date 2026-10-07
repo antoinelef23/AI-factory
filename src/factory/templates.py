@@ -93,7 +93,9 @@ covers: [BHV-1]
 def offline_tasks(item: WorkItem, golden_path: str | None) -> str:
     """tasks.md in the exact format Claudo's plan parser reads (`### T1 — title`, bracketed lists,
     backticked files_touched, a `trigger` on the checkpoint). Lint-clean against the real engine."""
-    scaffold = f"golden_paths/{golden_path}" if golden_path else "the IT golden path"
+    # The app is ALREADY scaffolded from the golden path before any task runs (the factory does it):
+    # a "scaffold" task would only make an agent redo, and break, working code (measured: $3.29, 11 min).
+    where = f"golden_paths/{golden_path}" if golden_path else "the IT golden path"
     return f"""---
 type: tasks
 feature: {item.slug}
@@ -106,37 +108,30 @@ design: ./design.md      # version: 0.1.0
 
 # Tasks — {item.title}
 
-### T1 — Scaffold the app from the golden path
+### T1 — Implement the core use case
 - **depends_on :** []
-- **implements :** [BHV-1, INV-1]
-- **files_touched :** `app/`, `tests/`, `pyproject.toml`
-- **verify :** `uv run pytest -q`
-- **done_when :** the app starts from {scaffold} and `GET /health` returns 200 ok.
-- **prompt :**
-  > Scaffold the application from {scaffold}. Keep its structure, CI and Dockerfile.
-  > Use ONLY the stack of design.md section 3. Write the `GET /health` test first (BHV-1).
-
-### T2 — Implement the core use case
-- **depends_on :** [T1]
-- **implements :** [BHV-2]
+- **implements :** [BHV-1, BHV-2, INV-1]
 - **files_touched :** `app/`, `tests/`
 - **verify :** `uv run pytest -q`
 - **done_when :** the behavior of the intent in spec.md section 1 is covered by passing tests.
 - **prompt :**
-  > Implement the main use case described in spec.md section 1 (BHV-2). Tests first.
+  > The app is already scaffolded from {where}: extend it, never recreate it. Keep `GET /health` (BHV-1).
+  > Implement the main use case of spec.md section 1 (BHV-2). Tests first.
+  > Use ONLY the stack of design.md section 3.
   > No secrets in code; configuration from environment variables.
 
-### T3 — Evals and gates
-- **depends_on :** [T2]
-- **implements :** [INV-1, INV-2, EVAL-1, EVAL-2, EVAL-3]
+### T2 — Evals and gates
+- **depends_on :** [T1]
+- **implements :** [INV-2, EVAL-1, EVAL-2, EVAL-3]
 - **files_touched :** `tests/`
 - **verify :** `uv run pytest -q`
 - **done_when :** every eval of spec.md section 7 passes at maturity `{item.maturity}`.
 - **prompt :**
-  > Make every eval of spec.md section 7 executable and green. Only touch app code to fix a defect.
+  > Make every eval of spec.md section 7 an executable test named `test_eval_<n>_...` and marked
+  > `@pytest.mark.eval`. Only touch app code to fix a defect.
 
 ### CP-1 — Ship review (the merge is human)
-- **trigger :** auto when [T3] done
+- **trigger :** auto when [T2] done
 - **mode :** blocking
 """
 
@@ -175,14 +170,27 @@ PLAN_FORMAT = """EXACT FORMAT (a parser reads it; any deviation makes the plan u
 """
 
 
-def plan_prompt(item: WorkItem, feedback: str, spec_ids: list[str] | None = None) -> str:
+def plan_prompt(
+    item: WorkItem, feedback: str, spec_ids: list[str] | None = None, scaffolded: list[str] | None = None
+) -> str:
     fb = f"\nThe owner rejected the previous plan. Their feedback:\n{feedback}\n" if feedback else ""
     ids = f"\nSpec IDs you may reference in `implements`: {', '.join(spec_ids)}.\n" if spec_ids else ""
+    files = (
+        "\nFiles ALREADY present in the app (scaffolded and working, `GET /health` included):\n  "
+        + ", ".join(scaffolded)
+        + "\n"
+        if scaffolded
+        else ""
+    )
     return f"""You are the planner of a governed AI software factory.
 Read spec.md and design.md in the current directory. Write tasks.md: the execution plan.
-Rules: T1 scaffolds from the golden path named in design.md section 2; small tasks; tests
-before code; use ONLY the stack in design.md section 3; every BHV and INV of the spec is
-implemented by some task.{ids}{fb}
+THE APP IS ALREADY SCAFFOLDED from the golden path before any task runs.{files}
+Never plan a scaffolding/setup task and never ask to recreate, empty or replace those files: a task that
+does so only burns time and breaks working code. T1 already starts from a running app.
+Rules: small tasks; tests before code; use ONLY the stack in design.md section 3; every BHV and INV of
+the spec is implemented by some task. Each task that changes app code also owns its tests: list
+`tests/` in files_touched, and write each EVAL it implements as a test named `test_eval_<n>_...`
+marked `@pytest.mark.eval` (the merge gate runs only those).{ids}{fb}
 {PLAN_FORMAT}
 Output ONLY the markdown of tasks.md (feature: {item.slug}), no commentary, no code fence.
 """

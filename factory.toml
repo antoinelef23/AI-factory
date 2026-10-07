@@ -28,7 +28,11 @@ judge = "haiku"                   # a different, cheaper model than the generato
 # sibling ../AI-Workflow-gates/_build or ../Claudo. With no engine found the factory still runs, unlinted.
 claudo = ""
 plan_lint_retries = 2             # re-prompt the planner this many times with Claudo's plan-lint errors
-build_timeout = 3600              # seconds allowed per Claudo orchestrator run
+# Lowest maturity built task-by-task through Claudo (pov|poc|mvp|prod). Measured on a two-endpoint app: one
+# Claudo task cost $3.29 / 11 min against $0.71 / 3 min for a whole app on the single-agent path, so the
+# auditable path engages where audit earns its price. POV/POC use the single agent (gates still apply).
+build_from = "mvp"
+build_timeout = 3600             # seconds allowed per Claudo orchestrator run
 budget_usd = 0                    # spend cap per orchestrator run (LAB_BUDGET_USD); 0 = no cap
 
 # Gates per maturity rung. The higher the rung, the stricter the factory.

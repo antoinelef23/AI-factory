@@ -48,10 +48,12 @@ def test_offline_plan_lints_clean_at_every_maturity(foreman, engine, maturity):
 def test_the_engine_rejects_what_it_should(foreman, engine):
     """The bridge is not a rubber stamp: a broken plan is reported with Claudo's own messages."""
     item, spec, design, tasks = offline_triplet(foreman)
-    cyclic = tasks.replace("- **depends_on :** []", "- **depends_on :** [T3]", 1)
+    # T2 depends on T1 already; making T1 depend on T2 closes a cycle
+    cyclic = tasks.replace("- **depends_on :** []", "- **depends_on :** [T2]", 1)
     bad = engine.lint_plan(item.slug, spec=spec, design=design, tasks=cyclic)
     assert not bad.ok and any("cycle" in e for e in bad.errors)
-    ghost = tasks.replace("[BHV-1, INV-1]", "[BHV-99]", 1)
+    assert "[BHV-1, BHV-2, INV-1]" in tasks  # guard: the replacement below must actually change the plan
+    ghost = tasks.replace("[BHV-1, BHV-2, INV-1]", "[BHV-99]", 1)
     assert any(
         "BHV-99" in e for e in engine.lint_plan(item.slug, spec=spec, design=design, tasks=ghost).errors
     )

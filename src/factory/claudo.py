@@ -8,6 +8,7 @@ factory.toml, then $CLAUDO_HOME, then a sibling checkout.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -206,6 +207,20 @@ class ClaudoEngine:
         if p.returncode != 0:
             raise EngineError(f"signing {cp} failed: {(p.stderr or p.stdout).strip()[-300:]}")
         return feature / ".approvals" / cp
+
+    @staticmethod
+    def journal_cost(project: Path, slug: str) -> float:
+        """Total model spend Claudo recorded for this feature (tolerant: a torn line or no journal is 0)."""
+        path = project / "work" / slug / ".runs" / "journal.jsonl"
+        if not path.is_file():
+            return 0.0
+        total = 0.0
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                total += float(json.loads(line).get("cost_usd") or 0.0)
+            except (ValueError, TypeError, AttributeError):
+                continue
+        return total
 
     @staticmethod
     def reject_checkpoint(project: Path, slug: str, cp: str, reason: str, by: str) -> Path:

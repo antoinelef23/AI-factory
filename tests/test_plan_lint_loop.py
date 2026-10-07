@@ -145,3 +145,34 @@ def test_config_rejects_nonsense_retry_counts(factory_root, retries):
             load_config(factory_root)
     else:
         assert load_config(factory_root).plan_lint_retries == 0  # clamped, never negative
+
+
+# ------------------------------------------------------------------ the planner is told the app exists
+
+
+def test_plan_prompt_says_the_app_is_already_scaffolded_and_lists_its_files(foreman):
+    """Regression (live run, $3.29 / 11 min): T1 was 'scaffold the app', redone over a working app."""
+    runner = Scripted([GOOD])
+    to_plan(foreman, runner, FakeEngine())
+    prompt = next(p for p in runner.prompts if "planner of" in p)
+    assert "ALREADY SCAFFOLDED" in prompt and "Never plan a scaffolding/setup task" in prompt
+    assert "app/main.py" in prompt and "tests/test_health.py" in prompt and "justfile" in prompt
+    assert "test_eval_<n>_" in prompt and "@pytest.mark.eval" in prompt  # the merge gate runs only evals
+
+
+def test_offline_plan_has_no_scaffold_task_and_keeps_the_eval_convention(foreman):
+    item = foreman.approve(foreman.run(foreman.intake("X", "an api", "poc")), "business")
+    tasks = foreman.store.read(item, "tasks.md")
+    headers = [ln for ln in tasks.splitlines() if ln.startswith("### ")]
+    assert [h.split(" — ")[0] for h in headers] == ["### T1", "### T2", "### CP-1"]
+    assert not any("caffold" in h for h in headers)  # no scaffolding task: the app already exists
+    assert "already scaffolded" in tasks and "@pytest.mark.eval" in tasks
+
+
+def test_golden_health_test_is_a_real_eval():
+    from pathlib import Path
+
+    text = (
+        Path(__file__).resolve().parents[1] / "golden_paths/python-fastapi/tests/test_health.py"
+    ).read_text(encoding="utf-8")
+    assert "@pytest.mark.eval" in text and "def test_eval_1_health" in text

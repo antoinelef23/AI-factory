@@ -70,6 +70,7 @@ class WorkItem:
     cost_usd: float = 0.0
     judgements: dict = field(default_factory=dict)  # kind -> {verdict, average, summary}; advisory only
     build_attempts: int = 0  # total build runs, for telemetry (the retry budget is per `run`)
+    claudo_cost_seen: float = 0.0  # Claudo journal spend already added to cost_usd
     claudo_cp: str = ""  # human checkpoint Claudo is paused at (e.g. CP-1); "" = none pending
     claudo_rejection: dict = field(default_factory=dict)  # {cp, reason, by}: IT rejected, rework pending
 

@@ -292,7 +292,8 @@ class Foreman:
             if self.runner is None:
                 text = offline_tasks(item, self._golden_path(item))
             else:
-                ok, text = self._ask_agent(item, plan_prompt(item, feedback, spec_ids), "plan")
+                prompt = plan_prompt(item, feedback, spec_ids, self._scaffold_files(item))
+                ok, text = self._ask_agent(item, prompt, "plan")
                 if not ok:
                     return False, text
             lint = self._lint(item, text)
@@ -388,6 +389,24 @@ class Foreman:
     def app_dir(self, item: WorkItem) -> Path:
         return self.cfg.apps_dir / item.slug
 
+    def _scaffold_files(self, item: WorkItem) -> list[str]:
+        """What the app will already contain when the plan starts (the golden path's files)."""
+        gp = self._golden_path(item)
+        src = self.cfg.golden_paths_dir / gp if gp else None
+        if not src or not src.is_dir():
+            return []
+        return sorted(p.relative_to(src).as_posix() for p in src.rglob("*") if p.is_file())
+
+    def _uses_claudo(self, item: WorkItem) -> bool:
+        """Claudo's per-task rigor costs several times the single-agent path (measured on a two-endpoint
+        app: $3.29 for one task vs $0.71 for a whole app), so it engages from `build_from` maturity up,
+        where an auditable task-by-task build earns its price."""
+        return (
+            self.engine is not None
+            and self.runner is not None
+            and MATURITIES.index(item.maturity) >= MATURITIES.index(self.cfg.claudo_build_from)
+        )
+
     def _scaffold(self, item: WorkItem, app: Path) -> str:
         gp = self._golden_path(item)
         src = self.cfg.golden_paths_dir / gp if gp else None
@@ -427,7 +446,7 @@ class Foreman:
         # Claudo executes the approved plan task by task (DAG, per-task verify, evals, reviewer panel).
         # After a clean Claudo run, a failed FACTORY gate (radar, secrets...) is a targeted fix for one
         # agent below, not a replay of the whole plan; an IT rejection goes back through Claudo.
-        if self.engine is not None and (not item.claudo_cp or item.claudo_rejection):
+        if self._uses_claudo(item) and (not item.claudo_cp or item.claudo_rejection):
             return self._build_with_claudo(item, app, detail)
         forbidden = [t.name for t in self.radar.techs if verdict(t, item.maturity) == BLOCK]
         result = self.runner.run(
@@ -454,6 +473,13 @@ class Foreman:
             env["LAB_BUDGET_USD"] = str(self.cfg.claudo_budget_usd)
         return env
 
+    def _add_claudo_cost(self, item: WorkItem, app: Path) -> None:
+        """Claudo's agents are billed outside the factory's own runner: read the spend from its journal."""
+        assert self.engine is not None
+        total = self.engine.journal_cost(app, item.slug)
+        item.cost_usd += max(0.0, total - item.claudo_cost_seen)
+        item.claudo_cost_seen = max(item.claudo_cost_seen, total)
+
     def _build_with_claudo(self, item: WorkItem, app: Path, scaffold: str) -> tuple[bool, str]:
         assert self.engine is not None
         prepare_project(app)  # git repo + local identity + `evals` recipe: what the orchestrator needs
@@ -463,6 +489,7 @@ class Foreman:
             item.claudo_rejection = {}
         res = self.engine.run_build(item.slug, app, env=self._claudo_env(), timeout=self.cfg.claudo_timeout)
         self.store.write(item, "claudo-build.log", res.log[-30000:])
+        self._add_claudo_cost(item, app)
         if res.outcome == "checkpoint":
             item.claudo_cp = res.checkpoint
             return True, f"{scaffold}; Claudo built the plan, paused at {res.checkpoint}"
@@ -491,6 +518,7 @@ class Foreman:
             timeout=self.cfg.claudo_timeout,
         )
         self.store.write(item, "claudo-final.log", res.log[-30000:])
+        self._add_claudo_cost(item, app)
         if res.outcome != "done":
             return False, f"Claudo did not complete after approval ({res.outcome}):\n{res.log[-2500:]}"
         item.claudo_cp = ""
