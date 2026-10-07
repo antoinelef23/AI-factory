@@ -50,6 +50,19 @@ class Tech:
     replaced_by: str | None = None
     preferred: bool = False
     note: str = ""
+    # The name is also an ordinary word ("requests"): in free text it counts only in a code-like context.
+    text_strict: bool = False
+
+
+def _strict_pattern(aliases: tuple[str, ...]) -> re.Pattern[str]:
+    """Code-like mentions of an ambiguous name: `requests`, import requests, requests.get(, pip install
+    requests, requests>=2, "the Requests library". Never the bare English word ("100 requests")."""
+    a = "(?:" + "|".join(re.escape(x) for x in aliases) + ")"
+    return re.compile(
+        rf"`{a}`|\b(?:import|from)\s+{a}\b|\b{a}\.[A-Za-z_]\w*\s*\(|\b(?:pip|uv)\s+(?:install|add)\s+(?:\S+\s+)*?{a}\b"
+        rf"|\b{a}\s*[=<>~!]=|\bthe\s+{a}\s+(?:library|package|module|client)\b",
+        re.I,
+    )
 
 
 @dataclass
@@ -65,7 +78,14 @@ class Radar:
             for alias in (t.id, *t.match):
                 self._by_name.setdefault(normalize(alias), t)
         self._text_patterns = [
-            (t, re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(a) for a in t.match) + r")(?![\w-])", re.I))
+            (
+                t,
+                _strict_pattern(t.match)
+                if t.text_strict
+                else re.compile(
+                    r"(?<![\w-])(?:" + "|".join(re.escape(a) for a in t.match) + r")(?![\w-])", re.I
+                ),
+            )
             for t in self.techs
             if t.match
         ]
@@ -126,6 +146,7 @@ def load_radar(path: Path) -> Radar:
                 replaced_by=raw.get("replaced_by"),
                 preferred=bool(raw.get("preferred", False)),
                 note=raw.get("note", ""),
+                text_strict=bool(raw.get("text_strict", False)),
             )
         )
     for t in techs:

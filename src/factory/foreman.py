@@ -16,7 +16,7 @@ from factory.claudo import ClaudoEngine, EngineError, LintResult, load_or_create
 from factory.config import Config
 from factory.design import choose_stack, detect_capabilities, render_design
 from factory.gates import Executor, GateResult, format_report, run_gates, shell_executor
-from factory.guard import check_project
+from factory.guard import check_project, plan_radar_errors
 from factory.judge import judge
 from factory.project import prepare_project
 from factory.radar import BLOCK, MATURITIES, Radar, verdict
@@ -282,12 +282,17 @@ class Foreman:
         return True, f"stack from radar: {stack}{extra}{gaps}"
 
     def _lint(self, item: WorkItem, tasks: str) -> LintResult | None:
-        if self.engine is None:
-            return None
-        s = self.store
-        return self.engine.lint_plan(
-            item.slug, spec=s.read(item, "spec.md"), design=s.read(item, "design.md"), tasks=tasks
-        )
+        """Claudo's plan-lint (when available) plus the radar check on the plan itself. None = nothing
+        to report because there is no engine and the plan names no forbidden technology."""
+        result = LintResult()
+        if self.engine is not None:
+            s = self.store
+            result = self.engine.lint_plan(
+                item.slug, spec=s.read(item, "spec.md"), design=s.read(item, "design.md"), tasks=tasks
+            )
+        radar_errors = plan_radar_errors(tasks, self.radar, item.maturity)
+        result.errors.extend(radar_errors)
+        return None if self.engine is None and not radar_errors else result
 
     def _do_plan(self, item: WorkItem) -> tuple[bool, str]:
         """Write tasks.md. With Claudo available the plan must pass ITS plan-lint before a human sees

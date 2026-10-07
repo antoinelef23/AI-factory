@@ -7,7 +7,7 @@ Plan: [ROADMAP.md](ROADMAP.md). Strategy: [PLANS.md](PLANS.md). How to run: [REA
 **Phase 0 complete. Phase 1 core complete** (P1-1, P1-3, P1-4, P1-6). Local git history only, **nothing pushed**.
 The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
-**Verification command:** `just check` (ruff check + format check + pytest). Last run: **164 passed**.
+**Verification command:** `just check` (ruff check + format check + pytest). Last run: **197 passed**.
 Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-ci` green on **Windows and Linux (WSL)**.
 
 ### Roadmap items done
@@ -22,7 +22,8 @@ Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-
 | P1-2 package engine | **replaced** | the factory *discovers* Claudo (config / `CLAUDO_HOME` / sibling) instead of vendoring it; decision D2 revised, no monorepo |
 | P1-8 trajectory guard as gate | done | Claudo's `trajectory_guard.py` runs as an MVP+ gate; real guard tested on a forged journal |
 | P1-9 spec/design immutable | done (factory-side) | sha256 frozen at approval; gate fails if the store's or the app's copy differs; 4 tamper tests, mutation-checked |
-| P1-5, P1-7, P1-10 | open | see Next |
+| P1-5 radar check on plans | done | `plan_radar_errors` feeds the lint retry loop; audited on 4 real agent plans: 0 false positives, 2 true positives (SQLite at MVP+) |
+| P1-7, P1-10 | open | see Next |
 
 ### Live runs and what they taught (all in scratch copies, not committed)
 
@@ -55,6 +56,9 @@ second review (needs a Claudo change).
 - Factory + Claudo on Linux (the Claudo suite was run there; the factory suite was not).
 
 ## Open risks / known limits
+- Text matching of technology names: an alias that is also an everyday word ("requests") produced false positives on
+  real plans and business ideas. Fixed with `text_strict` (code-like contexts only) for `requests`; any new ambiguous
+  radar entry needs the same flag.
 - Roles are self-declared (`--as it`): the signed token proves the factory wrote it, not who the human was.
 - Approval secret is held by the orchestrator process on the host, so a host agent with code execution could read it
   (Claudo's documented residual M4; the sandbox runner is the fix, ROADMAP P1-7).
@@ -63,7 +67,8 @@ second review (needs a Claudo change).
 - Only one golden path (python-fastapi).
 
 ## Next steps (in order)
-1. P1-5: a technology forbidden by the radar inside a *plan* (task prompts, files) fails before any agent runs.
-2. P1-7: sandbox runner by default for MVP+ builds (Docker), then re-check the live path.
+1. P1-7: sandbox runner by default for MVP+ builds. NOT a quick win: Claudo's sandbox needs an egress-allowlist proxy
+   that does not exist yet (its own backlog) and Docker is not running here; needs a decision and a setup session.
+2. Radar drift (ROADMAP P3-2/P3-6): `radar diff` + scan shipped apps against a changed radar, open migration items.
 3. Ask Antoine before spending more: a live run through the reject path (~$3-4) and `judge = true` end to end (~$0.5).
 4. Phase 2 (real delivery: git repo, PR, GitHub issue intake) needs decisions D3/D6 and a push go-ahead.

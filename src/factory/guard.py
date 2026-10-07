@@ -17,6 +17,41 @@ from factory.radar import ALLOW, APPROVAL, BLOCK, Radar, normalize, verdict
 # Design docs list forbidden technologies on purpose; those regions are not usage.
 IGNORE_BLOCK = re.compile(r"<!--\s*radar:ignore\s*-->.*?<!--\s*/radar:ignore\s*-->", re.S | re.I)
 
+# A plan line that names a technology only to forbid it ("Do not add Flask") is a guardrail, not usage.
+NEGATION = re.compile(
+    r"\b(not|never|no|don't|dont|avoid|without|forbidden|prohibited|instead of|rather than|replace[sd]?)\b",
+    re.I,
+)
+TASK_HEADER = re.compile(r"^###\s+((?:T|CP-)\d+)\b")
+
+
+def plan_radar_errors(tasks_md: str, radar: Radar, maturity: str) -> list[str]:
+    """Technologies the radar BLOCKS at `maturity` that a plan asks the agents to USE.
+
+    Runs before any agent executes, so a plan aimed at a forbidden stack costs nothing. Only lines
+    without a negation count: plans legitimately say "Do not add Flask, MongoDB". The build-time radar
+    gate (manifests, imports, images) remains the real enforcement; this one only saves the spend."""
+    errors: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    task = "plan"
+    for line in tasks_md.splitlines():
+        header = TASK_HEADER.match(line)
+        if header:
+            task = header.group(1)
+            continue
+        if NEGATION.search(line):
+            continue
+        for tech in radar.scan_text(line):
+            if verdict(tech, maturity) != BLOCK or (task, tech.id) in seen:
+                continue
+            seen.add((task, tech.id))
+            alt = radar.get(tech.replaced_by) if tech.replaced_by else None
+            errors.append(
+                f"{task}: asks to use {tech.name} ({tech.ring}), not allowed at {maturity}"
+                + (f"; use {alt.name} instead" if alt else "")
+            )
+    return errors
+
 
 @dataclass(frozen=True)
 class Violation:
