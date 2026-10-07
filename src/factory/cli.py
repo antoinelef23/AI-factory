@@ -164,6 +164,18 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_demo(args: argparse.Namespace) -> int:
+    from factory.demo import DemoError, run_demo
+
+    root = Path(args.root).resolve() if args.root else find_root()
+    try:
+        run_demo(root, with_tests=args.with_tests)
+    except DemoError as e:
+        print(f"DEMO FAILED: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="factory", description="AI software factory governed by the IT tech radar"
@@ -224,6 +236,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("board", help="all work items").set_defaults(func=cmd_board)
     sub.add_parser("radar", help="show the company tech radar").set_defaults(func=cmd_radar)
+
+    sp = sub.add_parser("demo", help="offline, self-checking walkthrough in a temp folder (about 5 s)")
+    sp.add_argument(
+        "--with-tests", action="store_true", help="also run the app's pytest gate (needs uv + network)"
+    )
+    sp.set_defaults(func=cmd_demo)
 
     sp = sub.add_parser("check", help="IT: radar-check any project folder")
     sp.add_argument("path")
