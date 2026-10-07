@@ -93,6 +93,18 @@ uv run factory approve expense-tracker --as it
 - **IT changes the radar:** move `fastapi` to `hold` in `radar.toml` and re-run `factory check apps/<slug>`.
 - **Claudo handoff:** `uv run factory export <slug> --claudo C:\Users\Antoine\Projets\AI-Workflow-gates\_build`.
 
+## When IT changes the radar: diff and drift
+
+```powershell
+uv run factory radar-diff old-radar.toml      # what changed, and what it newly forbids at each maturity
+uv run factory drift                          # which SHIPPED apps no longer comply (exit 1 if any: CI-friendly)
+uv run factory drift --open                   # ...and track a migration item per drifted app (idempotent)
+```
+
+`drift` re-checks every shipped app (manifests, imports, Docker images, design) against the **current** radar,
+honoring the exceptions IT granted per app. Migration items are tracked, not executed: changing an existing app is
+ROADMAP P2-6, and `run` refuses to push them through the new-app pipeline.
+
 ## Claudo: plan validation, audited builds, signed approvals
 
 The factory finds a [Claudo](https://github.com/antoinelef23/Claudo) checkout on its own (`[engine] claudo`

@@ -15,6 +15,7 @@ from factory.agents import BUILD_TOOLS, READ_ONLY_TOOLS, ClaudeRunner, strip_fen
 from factory.claudo import ClaudoEngine, EngineError, LintResult, load_or_create_secret
 from factory.config import Config
 from factory.design import choose_stack, detect_capabilities, render_design
+from factory.drift import Drift, migration_idea
 from factory.gates import Executor, GateResult, format_report, run_gates, shell_executor
 from factory.guard import check_project, plan_radar_errors
 from factory.judge import judge
@@ -74,9 +75,43 @@ class Foreman:
         self.store.write(item, "idea.md", idea_md(item))
         return item
 
+    def open_migration(self, drift: Drift) -> WorkItem | None:
+        """Track a drifted app as a migration item. Idempotent: None if one is already open for that app."""
+        for existing in self.store.all():
+            if (
+                existing.kind == "migration"
+                and existing.target == drift.item.slug
+                and existing.status != "shipped"
+            ):
+                return None
+        title, idea = migration_idea(drift, self.radar)
+        item = WorkItem(
+            slug=self.store.new_slug(f"migrate {drift.item.slug}"),
+            title=title,
+            idea=idea,
+            maturity=drift.item.maturity,
+            requester="radar-drift",
+            kind="migration",
+            target=drift.item.slug,
+        )
+        item.log("intake", "opened by `factory drift --open`")
+        self.run(item)  # records the "tracked only" explanation and saves
+        self.store.write(item, "idea.md", idea_md(item))
+        return item
+
     # ------------------------------------------------------------------ driving
     def run(self, item: WorkItem, max_steps: int = 20) -> WorkItem:
         """Run automatic stages until a checkpoint, a failure, or shipped."""
+        if item.kind != "app":
+            # Executing a change to an EXISTING app needs a repo-aware flow (ROADMAP P2-6); running it through
+            # the new-app pipeline would scaffold a second, unrelated app. Tracked, never silently misrun.
+            item.status = "blocked"
+            item.feedback = (
+                f"{item.kind} item for '{item.target}': tracked only. Changing an existing app is "
+                "not executable yet (ROADMAP P2-6); fix the app by hand or promote the work to a new item."
+            )
+            self.store.save(item)
+            return item
         if item.status == "blocked":
             item.status = "active"
             item.log("retry", "resuming after block")

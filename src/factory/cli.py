@@ -10,6 +10,7 @@ from pathlib import Path
 from factory.agents import AgentError, get_runner
 from factory.claudo import ClaudoEngine, EngineError, discover
 from factory.config import ConfigError, find_root, load_config
+from factory.drift import radar_diff, render_diff, scan_drift
 from factory.foreman import FactoryError, Foreman, describe_step
 from factory.guard import check_project
 from factory.radar import MATURITIES, POLICY, RINGS, RadarError, load_radar
@@ -121,6 +122,30 @@ def cmd_board(args: argparse.Namespace) -> int:
         waiting = i.step.role if i.status == "waiting" else ("fix" if i.status == "blocked" else "-")
         print(f"{i.slug:<34} {i.maturity:<5} {i.stage:<14} {i.status:<8} {waiting}")
     return 0
+
+
+def cmd_radar_diff(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve() if args.root else find_root()
+    old = load_radar(Path(args.old))
+    new = load_radar(Path(args.new) if args.new else load_config(root).radar_path)
+    print(render_diff(radar_diff(old, new), old, new))
+    return 0
+
+
+def cmd_drift(args: argparse.Namespace) -> int:
+    """Re-check every shipped app against the CURRENT radar. Exit 1 when any app drifted (usable in CI)."""
+    f = _foreman(args, "offline")
+    drifted, clean = scan_drift(f.store.all(), f.radar, f.cfg.apps_dir)
+    print(f"Radar {f.radar.company} {f.radar.version}: {len(clean)} compliant, {len(drifted)} drifted")
+    for d in drifted:
+        print()
+        print(f"  {d.item.slug} [{d.item.maturity}]")
+        for v in d.violations:
+            print(f"    {v.describe()}")
+        if args.open:
+            opened = f.open_migration(d)
+            print(f"    -> migration item: {opened.slug}" if opened else "    -> migration already tracked")
+    return 1 if drifted else 0
 
 
 def cmd_radar(args: argparse.Namespace) -> int:
@@ -257,6 +282,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("board", help="all work items").set_defaults(func=cmd_board)
     sub.add_parser("radar", help="show the company tech radar").set_defaults(func=cmd_radar)
+
+    sp = sub.add_parser("radar-diff", help="IT: what changed between two radars, and what it newly forbids")
+    sp.add_argument("old", help="the previous radar.toml (e.g. from git show HEAD~1:radar.toml)")
+    sp.add_argument("new", nargs="?", help="the new radar (default: the factory's current radar.toml)")
+    sp.set_defaults(func=cmd_radar_diff)
+
+    sp = sub.add_parser(
+        "drift", help="IT: which shipped apps no longer comply with the current radar (exit 1 if any)"
+    )
+    sp.add_argument("--open", action="store_true", help="also open a tracked migration item per drifted app")
+    sp.set_defaults(func=cmd_drift)
 
     sp = sub.add_parser("judge", help="LLM judge on an artifact (advisory, billed: uses the judge model)")
     sp.add_argument("slug")

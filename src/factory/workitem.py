@@ -57,6 +57,8 @@ class WorkItem:
     idea: str
     maturity: str
     requester: str = "business"
+    kind: str = "app"  # app | migration (tracked: brings an existing app back to the radar)
+    target: str = ""  # for a migration: the slug of the app concerned
     created: str = field(default_factory=now)
     stage: str = "triage"
     status: str = "active"  # active | waiting | blocked | shipped
