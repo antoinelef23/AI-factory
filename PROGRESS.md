@@ -4,10 +4,15 @@ Plan: [ROADMAP.md](ROADMAP.md). Strategy: [PLANS.md](PLANS.md). How to run: [REA
 
 ## State (2026-10-07)
 
-**Phase 0 complete. Phase 1 core complete** (P1-1, P1-3, P1-4, P1-6). Local git history only, **nothing pushed**.
+**Phase 0 complete. Phase 1 core complete** (P1-1, P1-3, P1-4, P1-6).
+Published (private) on 2026-10-07: [AI-factory](https://github.com/antoinelef23/AI-factory) and
+[Claudo-portable](https://github.com/antoinelef23/Claudo-portable) (Claudo + the portability work). The original
+Claudo repo (`antoinelef23/AI-Workflow-gates`, local remote `origin`) was deliberately NOT pushed to: Claudo's local
+branch tracks `portable` and `remote.pushDefault = portable` so a plain `git push` cannot reach it.
+**CI is green** on GitHub (Windows + Ubuntu for the factory; Claudo's own gate workflow on Linux).
 The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
-**Verification command:** `just check` (ruff check + format check + pytest). Last run: **296 passed, 1 skipped** (the skipped one is the billed calibration, `just calibrate`).
+**Verification command:** `just check` (ruff check + format check + pytest). Last run: **296 passed, 1 skipped** (also green in GitHub CI on Windows and Ubuntu; the real-engine integration tests skip there because no Claudo checkout is present) (the skipped one is the billed calibration, `just calibrate`).
 Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-ci` green on **Windows and Linux (WSL)**.
 
 ### Roadmap items done
@@ -73,11 +78,9 @@ examples, an invented requirement, vague outcomes). Findings:
 - Quote grounding rejected valid evidence when judges stitch passages with "..."; now every fragment must occur in order.
 
 ## Not verified
-- CI workflow (needs a push; a push needs Antoine's go-ahead).
 - The judge enabled during a Claudo-built item (`judge = true`) end to end with real models.
 - Sandbox runner (Docker) on Windows; the bind-mount path form is unit-tested only.
 - The three live5 fixes against a real Claudo run (unit-tested only).
-- Factory + Claudo on Linux (the Claudo suite was run there; the factory suite was not).
 
 ## Open risks / known limits
 - Text matching of technology names: an alias that is also an everyday word ("requests") produced false positives on
