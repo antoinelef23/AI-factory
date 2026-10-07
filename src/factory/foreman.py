@@ -21,7 +21,7 @@ from factory.drift import Drift, migration_idea
 from factory.gates import Executor, GateResult, format_report, run_gates, shell_executor
 from factory.guard import check_project, plan_radar_errors
 from factory.judge import judge
-from factory.project import prepare_project
+from factory.project import commit_leftovers, porcelain, prepare_project
 from factory.radar import BLOCK, MATURITIES, Radar, verdict
 from factory.templates import (
     SPEC_ID,
@@ -559,6 +559,23 @@ class Foreman:
             env["LAB_BUDGET_USD"] = str(self.cfg.claudo_budget_usd)
         return env
 
+    def _commit_leftovers(self, item: WorkItem, app: Path) -> None:
+        files = commit_leftovers(app, item.slug)
+        if files:
+            item.log(
+                "leftovers",
+                f"committed {len(files)} file(s) left outside the task scopes: {', '.join(files[:8])}",
+            )
+
+    def _clean_tree_gate(self, item: WorkItem) -> GateResult:
+        """What gets delivered is the git HEAD: every gate must have judged exactly that."""
+        app = self.app_dir(item)
+        if not (app / ".git").exists():
+            return GateResult("clean_tree", True, "not applicable: the app is not a git project")
+        dirty = porcelain(app)
+        detail = "uncommitted changes: " + ", ".join(dirty[:10]) if dirty else "HEAD is the delivered state"
+        return GateResult("clean_tree", not dirty, detail)
+
     def _add_claudo_cost(self, item: WorkItem, app: Path) -> None:
         """Claudo's agents are billed outside the factory's own runner: read the spend from its journal."""
         assert self.engine is not None
@@ -576,6 +593,8 @@ class Foreman:
         res = self.engine.run_build(item.slug, app, env=self._claudo_env(), timeout=self.cfg.claudo_timeout)
         self.store.write(item, "claudo-build.log", res.log[-30000:])
         self._add_claudo_cost(item, app)
+        if res.ok:
+            self._commit_leftovers(item, app)
         if res.outcome == "checkpoint":
             item.claudo_cp = res.checkpoint
             review = self.engine.review_verdict(app, item.slug, res.checkpoint)
@@ -609,6 +628,8 @@ class Foreman:
         )
         self.store.write(item, "claudo-final.log", res.log[-30000:])
         self._add_claudo_cost(item, app)
+        if res.ok:
+            self._commit_leftovers(item, app)
         if res.outcome != "done":
             return False, f"Claudo did not complete after approval ({res.outcome}):\n{res.log[-2500:]}"
         item.claudo_cp = ""
@@ -666,6 +687,7 @@ class Foreman:
             extra={
                 "immutable": lambda: self._immutability_gate(item),
                 "trajectory": lambda: self._trajectory_gate(item),
+                "clean_tree": lambda: self._clean_tree_gate(item),
             },
         )
         self.store.write(item, "gate-report.md", format_report(results, item.maturity))
