@@ -9,6 +9,7 @@ here without any model call:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 from factory.guard import Violation, check_project
@@ -99,9 +100,12 @@ class Drift:
     violations: list[Violation]
 
 
-def scan_drift(items: list[WorkItem], radar: Radar, apps_dir: Path) -> tuple[list[Drift], list[WorkItem]]:
-    """(drifted apps, compliant apps) among shipped items. Honors the IT exceptions recorded for each item:
-    an exception IT granted stays valid until IT removes it; only NEW violations are drift."""
+def scan_drift(
+    items: list[WorkItem], radar: Radar, apps_dir: Path, today: date | None = None
+) -> tuple[list[Drift], list[WorkItem]]:
+    """(drifted apps, compliant apps) among shipped items. Honors the IT exceptions recorded for each item
+    while they are in force; an EXPIRED exception no longer shelters its technology, so the app drifts."""
+    today = today or date.today()
     drifted: list[Drift] = []
     clean: list[WorkItem] = []
     for item in items:
@@ -112,7 +116,7 @@ def scan_drift(items: list[WorkItem], radar: Radar, apps_dir: Path) -> tuple[lis
             continue
         design = app / "work" / item.slug / "design.md"
         report = check_project(app, radar, item.maturity, docs=[design])
-        blocking = report.blocking(set(item.it_exceptions))
+        blocking = report.blocking(item.active_exceptions(today))
         (drifted.append(Drift(item, blocking)) if blocking else clean.append(item))
     return drifted, clean
 

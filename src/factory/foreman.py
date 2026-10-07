@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+from collections.abc import Callable
+from datetime import date, timedelta
 from pathlib import Path
 
 from factory.agents import BUILD_TOOLS, READ_ONLY_TOOLS, ClaudeRunner, strip_fences
@@ -55,6 +57,7 @@ class Foreman:
         self.store = store
         self.runner = runner
         self.executor = executor
+        self.today: Callable[[], date] = date.today  # injectable clock (tests)
         self.engine = engine  # Claudo: validates every plan with its own plan-lint when present
 
     # ------------------------------------------------------------------ intake
@@ -171,7 +174,10 @@ class Foreman:
         self._require_checkpoint(item, role)
         if item.stage == "design_review":
             pending = self._design_report(item).needs_approval()
-            item.it_exceptions = sorted(set(item.it_exceptions) | {v.key for v in pending})
+            granted = {v.key for v in pending} - item.active_exceptions(self.today())
+            item.it_exceptions = sorted(set(item.it_exceptions) | granted)
+            for key in granted:  # an exception is a debt: it lapses unless the policy says never
+                self._set_terms(item, key, None, f"approved at design review: {note}".strip(": "), by or role)
         if item.stage == "spec_review":
             self._record_hash(item, "spec.md")  # the business contract, frozen at its approval
         if item.stage == "design_review":
@@ -205,10 +211,30 @@ class Foreman:
         self.store.save(item)
         return item
 
-    def allow(self, item: WorkItem, tech: str, role: str, by: str = "") -> WorkItem:
-        """IT grants a radar exception for this item (e.g. a trial tech at MVP)."""
+    def _set_terms(self, item: WorkItem, key: str, expires: date | None, reason: str, by: str) -> None:
+        """Record why, by whom and until when. `expires=None` means the policy default (exception_days)."""
+        if expires is None and self.cfg.exception_days:
+            expires = self.today() + timedelta(days=self.cfg.exception_days)
+        item.exception_terms[key] = {
+            "expires": expires.isoformat() if expires else "",
+            "reason": reason,
+            "by": by,
+        }
+
+    def allow(
+        self,
+        item: WorkItem,
+        tech: str,
+        role: str,
+        by: str = "",
+        expires: date | None = None,
+        reason: str = "",
+    ) -> WorkItem:
+        """IT grants a radar exception for this item (e.g. a trial tech at MVP), with its terms."""
         if role != "it":
             raise FactoryError("only IT can grant a tech radar exception")
+        if expires is not None and expires < self.today():
+            raise FactoryError(f"an exception cannot expire in the past ({expires.isoformat()})")
         known = self.radar.get(tech) or self.radar.find(tech)
         key = known.id if known else tech
         if known and known.ring == "hold":
@@ -217,7 +243,9 @@ class Foreman:
             )
         if key not in item.it_exceptions:
             item.it_exceptions.append(key)
-        item.log("exception", f"IT {by} allowed {key}".replace("  ", " "))
+        self._set_terms(item, key, expires, reason, by or role)  # renewing = allowing again with a new date
+        until = item.expiry_of(key) or "no expiry"
+        item.log("exception", f"IT {by} allowed {key} until {until}: {reason}".replace("  ", " "))
         self.store.save(item)
         return item
 
@@ -231,7 +259,7 @@ class Foreman:
             raise FactoryError(f"cannot promote from {item.maturity} to {to}")
         item.log("promoted", f"{item.maturity} -> {to} by IT {by}".strip())
         item.maturity = to
-        item.it_exceptions = []  # exceptions were granted for the previous rung
+        item.it_exceptions, item.exception_terms = [], {}  # granted for the previous rung
         item.stage = "design"
         item.status = "active"
         return self.run(item)
@@ -615,7 +643,7 @@ class Foreman:
             app,
             radar=self.radar,
             maturity=item.maturity,
-            exceptions=set(item.it_exceptions),
+            exceptions=item.active_exceptions(self.today()),
             docs=[app / "work" / item.slug / "design.md"],
             commands=self.cfg.gate_commands,
             executor=self.executor,

@@ -35,6 +35,9 @@ class Config:
     claudo_home: str | None = None  # [engine] claudo; None = auto-discover (CLAUDO_HOME, sibling checkout)
     plan_lint_retries: int = 2  # [engine] plan_lint_retries: re-prompts with Claudo's lint errors
     claudo_build_from: str = "mvp"  # [engine] build_from: lowest maturity built through Claudo's orchestrator
+    exception_days: int = (
+        180  # [policy] exception_days: life of an exception granted at design review (0 = never)
+    )
     claudo_timeout: int = 3600  # [engine] build_timeout: seconds per orchestrator run
     claudo_budget_usd: float = 0.0  # [engine] budget_usd: per-run spend cap passed to Claudo (0 = none)
     judge_enabled: bool = False
@@ -86,6 +89,7 @@ def load_config(root: Path) -> Config:
         claudo_home=data.get("engine", {}).get("claudo") or None,
         plan_lint_retries=max(0, int(data.get("engine", {}).get("plan_lint_retries", 2))),
         claudo_build_from=data.get("engine", {}).get("build_from", "mvp"),
+        exception_days=max(0, int(data.get("policy", {}).get("exception_days", 180))),
         claudo_timeout=max(60, int(data.get("engine", {}).get("build_timeout", 3600))),
         claudo_budget_usd=max(0.0, float(data.get("engine", {}).get("budget_usd", 0))),
         models=dict(agent.get("models", {})),

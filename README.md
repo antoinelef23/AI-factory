@@ -101,6 +101,10 @@ uv run factory drift                          # which SHIPPED apps no longer com
 uv run factory drift --open                   # ...and track a migration item per drifted app (idempotent)
 ```
 
+Exceptions are debts: those granted at a design review lapse after `[policy] exception_days` (180 by default),
+`factory allow <slug> <tech> --as it --reason "..." --expires 2026-12-31` sets its own date and keeps the reason.
+Once an exception lapses, the build gate and `drift` stop sheltering its technology.
+
 `drift` re-checks every shipped app (manifests, imports, Docker images, design) against the **current** radar,
 honoring the exceptions IT granted per app. Migration items are tracked, not executed: changing an existing app is
 ROADMAP P2-6, and `run` refuses to push them through the new-app pipeline.

@@ -10,7 +10,7 @@ import json
 import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 
@@ -66,6 +66,8 @@ class WorkItem:
     notes: list[str] = field(default_factory=list)
     feedback: str = ""  # last rejection reason / failed gate report, fed to the next attempt
     it_exceptions: list[str] = field(default_factory=list)  # radar keys IT explicitly approved
+    # key -> {"expires": "YYYY-MM-DD" or "", "reason": str, "by": str}: why, who, and until when
+    exception_terms: dict = field(default_factory=dict)
     skip_design_review: bool = False
     approvals: list[dict] = field(default_factory=list)
     history: list[dict] = field(default_factory=list)
@@ -80,6 +82,18 @@ class WorkItem:
     @property
     def step(self) -> Step:
         return STEP_BY_NAME[self.stage]
+
+    def expiry_of(self, key: str) -> str:
+        return str(self.exception_terms.get(key, {}).get("expires", ""))
+
+    def active_exceptions(self, today: date) -> set[str]:
+        """Exceptions still in force: granted and not past their expiry day (the expiry day itself counts)."""
+        return {
+            k for k in self.it_exceptions if not self.expiry_of(k) or today.isoformat() <= self.expiry_of(k)
+        }
+
+    def expired_exceptions(self, today: date) -> list[str]:
+        return sorted(set(self.it_exceptions) - self.active_exceptions(today))
 
     def log(self, event: str, detail: str = "") -> None:
         self.history.append({"at": now(), "stage": self.stage, "event": event, "detail": detail})

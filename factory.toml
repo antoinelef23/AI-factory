@@ -23,6 +23,11 @@ plan = "sonnet"
 build = "sonnet"
 judge = "haiku"                   # a different, cheaper model than the generators (no self-grading)
 
+[policy]
+# An IT exception is a debt, not a permanent right: the ones granted when IT approves a design review lapse
+# after this many days (`factory allow --expires` sets its own date). 0 = they never lapse.
+exception_days = 180
+
 [engine]
 # Claudo checkout used to validate (and later execute) plans. Empty = auto-discover: $CLAUDO_HOME, then a
 # sibling ../AI-Workflow-gates/_build or ../Claudo. With no engine found the factory still runs, unlinted.

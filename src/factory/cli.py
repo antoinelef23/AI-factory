@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import sys
+from datetime import date
 from pathlib import Path
 
 from factory.agents import AgentError, get_runner
@@ -35,7 +36,15 @@ def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
     for note in item.notes:
         print(f"  note  : {note}")
     if item.it_exceptions:
-        print(f"  IT exceptions: {', '.join(item.it_exceptions)}")
+        today = date.today()
+        shown = [
+            f"{k} (until {item.expiry_of(k)})" if item.expiry_of(k) else f"{k} (no expiry)"
+            for k in item.it_exceptions
+        ]
+        print(f"  IT exceptions: {', '.join(shown)}")
+        lapsed = item.expired_exceptions(today)
+        if lapsed:
+            print(f"  EXPIRED exceptions: {', '.join(lapsed)}: renew with `factory allow`")
     for kind, j in item.judgements.items():
         print(
             f"  judge {kind}: {j['verdict']} ({j['average']}/5, advisory)  work/{item.slug}/judge-{kind}.md"
@@ -93,8 +102,13 @@ def cmd_reject(args: argparse.Namespace) -> int:
 
 def cmd_allow(args: argparse.Namespace) -> int:
     f = _foreman(args, "offline")
-    item = f.allow(f.store.load(args.slug), args.tech, args.role, args.by)
-    print(f"IT exceptions for {item.slug}: {', '.join(item.it_exceptions)}")
+    try:
+        expires = date.fromisoformat(args.expires) if args.expires else None
+    except ValueError:
+        raise FactoryError(f"--expires must be a date YYYY-MM-DD, got {args.expires!r}") from None
+    item = f.allow(f.store.load(args.slug), args.tech, args.role, args.by, expires, args.reason)
+    for key in item.it_exceptions:
+        print(f"  {key}: until {item.expiry_of(key) or 'no expiry'}")
     return 0
 
 
@@ -267,6 +281,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("slug")
     sp.add_argument("tech")
     role_opt(sp, ("it",))
+    sp.add_argument("--reason", required=True, help="why this exception is justified (kept with the item)")
+    sp.add_argument(
+        "--expires", help="last day it is valid, YYYY-MM-DD (default: the policy's exception_days)"
+    )
     sp.set_defaults(func=cmd_allow)
 
     sp = sub.add_parser("promote", help="IT: move a shipped app up the maturity ladder")
