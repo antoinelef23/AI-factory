@@ -6,6 +6,7 @@ Same shape as Claudo's AgentRunner (lab/engine/runner.py) so the two can converg
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -44,7 +45,10 @@ def resolve_claude() -> str | None:
 def claude_argv(
     executable: str, *, model: str | None, tools: list[str], max_turns: int, permission_mode: str
 ) -> list[str]:
-    """The prompt is NOT in argv: it goes through stdin (no quoting or length limits)."""
+    """The prompt is NOT in argv: it goes through stdin (no quoting or length limits).
+
+    An empty `tools` list means NO tools at all (`--tools ""`): for pure text-in/text-out calls such
+    as the judge, which is both cheaper and rules out wandering through files."""
     argv = [
         executable,
         "-p",
@@ -54,9 +58,8 @@ def claude_argv(
         permission_mode,
         "--max-turns",
         str(max_turns),
-        "--allowedTools",
-        ",".join(tools),
     ]
+    argv += ["--allowedTools", ",".join(tools)] if tools else ["--tools", ""]
     if model:
         argv += ["--model", model]
     return argv
@@ -97,11 +100,14 @@ class ClaudeRunner:
         tools: list[str] | None = None,
         max_turns: int = 10,
         permission_mode: str = "default",
+        thinking_tokens: int | None = None,
     ) -> AgentResult:
+        """`thinking_tokens` caps extended thinking (MAX_THINKING_TOKENS): thinking is billed as output,
+        and on a judge call it was 93% of the cost (11k of 12k output tokens)."""
         argv = claude_argv(
             self.executable,
             model=model,
-            tools=tools or READ_ONLY_TOOLS,
+            tools=READ_ONLY_TOOLS if tools is None else tools,
             max_turns=max_turns,
             permission_mode=permission_mode,
         )
@@ -115,6 +121,9 @@ class ClaudeRunner:
                 encoding="utf-8",
                 errors="replace",
                 timeout=self.timeout,
+                env=None
+                if thinking_tokens is None
+                else {**os.environ, "MAX_THINKING_TOKENS": str(thinking_tokens)},
             )
         except subprocess.TimeoutExpired:
             return AgentResult(False, "", 0.0, f"claude timed out after {self.timeout}s")

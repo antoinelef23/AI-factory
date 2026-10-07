@@ -56,7 +56,13 @@ class JudgingAgentRunner(FakeAgentRunner):
 
     `score` is what it gives every criterion; other prompts get a normal agent answer."""
 
-    def __init__(self, score: int = 5, text: str = "# generated\n") -> None:
+    DOC = (
+        "# Generated artifact\n\n"
+        "- INV-1: every stored record MUST have a positive amount in EUR.\n"
+        "- BHV-1: Given a valid request, When it is submitted, Then the response is 201.\n"
+    )
+
+    def __init__(self, score: int = 5, text: str = DOC) -> None:
         super().__init__(text)
         self.score = score
 
@@ -72,7 +78,8 @@ class JudgingAgentRunner(FakeAgentRunner):
         self.prompts.append((prompt, kw))
         kind = re.search(r"reviewer of a (\w+) produced", prompt).group(1)
         artifact = re.search(r"<artifact>\n(.*?)\n</artifact>", prompt, re.S).group(1)
-        quote = next(ln.strip() for ln in artifact.splitlines() if len(ln.strip()) > 8)[:100]
+        # A meaningful excerpt (grounding needs >= 24 real characters): the longest line, capped.
+        quote = max((ln.strip() for ln in artifact.splitlines()), key=len)[:100]
         crit = [
             {"id": c, "score": self.score, "evidence": f"{c} judged", "quote": quote}
             for c, _ in RUBRICS[kind]

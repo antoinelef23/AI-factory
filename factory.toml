@@ -12,7 +12,10 @@ golden_paths_dir = "golden_paths" # IT-approved project templates
 runner = "offline"                # offline (templates, free) | claude (Claude Code CLI, billed)
 max_turns_build = 40
 judge = false                     # LLM-as-judge on spec/plan/build (advisory, billed, agent runners only)
-max_build_attempts = 3            # build -> gate loops per `run` before a human is asked (agent runners only)
+# judge_thinking_tokens: unset = model default. Measured on one real spec (haiku): default thinking ~$0.08 and
+# caught invented requirements; budget 3000 ~$0.05; budget 0 ~$0.02 but MISSED them (fidelity 5). Cheap judging
+# is a false economy, so leave it unset unless you re-run the calibration (`just calibrate`, billed).
+max_build_attempts = 3           # build -> gate loops per `run` before a human is asked (agent runners only)
 
 [agent.models]                    # passed to `claude --model` (aliases accepted)
 spec = "sonnet"

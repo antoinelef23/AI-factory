@@ -24,7 +24,9 @@ RUBRICS: dict[str, list[Criterion]] = {
     "spec": [
         (
             "fidelity",
-            "captures EVERY concrete requirement and number of the idea; invents nothing the idea lacks",
+            "captures EVERY concrete requirement and number of the idea AND adds no business rule, number, "
+            "limit, target or fixed list the idea does not state (score 3 or less if it invents any; pure "
+            "technical elaboration of the idea's own rules, such as an error format, is fine)",
         ),
         (
             "testability",
@@ -76,6 +78,7 @@ class JudgeReport:
     problems: list[str] = field(default_factory=list)  # judge-output problems (missing/ungrounded)
     cost_usd: float = 0.0
     model: str = ""
+    raw: str = ""  # the judge's answer, kept (truncated) so an unreliable verdict can be audited
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -95,11 +98,39 @@ class JudgeReport:
             )
         if self.problems:
             out += ["", "Judge output problems:"] + [f"- {p}" for p in self.problems]
+        if self.verdict == "unreliable" and self.raw:
+            out += ["", "Raw judge answer (for audit):", "", "```", self.raw, "```"]
         return "\n".join(out) + "\n"
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[`*_#>|]", " ", text)).strip().lower()
+    """Case, whitespace, markdown decoration and list-bullet markers are not content."""
+    text = re.sub(r"[`*_#>|]", " ", text)
+    text = re.sub(r"(?<!\S)[-•]+(?!\S)", " ", text)  # standalone '-' / bullets: '- a' and 'a' are the same
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+MIN_FRAGMENT, MIN_GROUNDED_CHARS = 12, 24
+_ELLIPSIS = re.compile(r"\.{3}|…")
+
+
+def is_grounded(quote: str, haystack: str) -> bool:
+    """A quote is grounded when it is made of REAL text of the artifact.
+
+    Judges often stitch two passages with "..." (or join a bullet to its sub-bullet), so the quote is
+    split on ellipses and every fragment must occur in the artifact, in order. Fabricated text fails;
+    trivially short fragments are ignored but cannot carry a quote alone."""
+    pos, grounded_chars = 0, 0
+    for fragment in _ELLIPSIS.split(quote):
+        frag = _norm(fragment)
+        if len(frag) < MIN_FRAGMENT:
+            continue
+        found = haystack.find(frag, pos)
+        if found < 0:
+            return False
+        pos = found + len(frag)
+        grounded_chars += len(frag)
+    return grounded_chars >= MIN_GROUNDED_CHARS
 
 
 def build_prompt(kind: str, artifact: str, idea: str, extra: str = "") -> str:
@@ -177,7 +208,7 @@ def evaluate(kind: str, raw: str, artifact: str) -> JudgeReport:
             continue
         seen.add(cid)
         quote = str(raw_c.get("quote", "")).strip()
-        grounded = bool(quote) and _norm(quote) in haystack
+        grounded = is_grounded(quote, haystack)
         if not grounded:
             report.problems.append(f"{cid}: quote not found verbatim in the artifact (score ignored)")
         report.criteria.append(
@@ -197,15 +228,32 @@ def evaluate(kind: str, raw: str, artifact: str) -> JudgeReport:
 
 
 def judge(
-    runner: JudgeRunner, kind: str, artifact: str, idea: str, *, model: str | None, cwd, extra: str = ""
+    runner: JudgeRunner,
+    kind: str,
+    artifact: str,
+    idea: str,
+    *,
+    model: str | None,
+    cwd,
+    extra: str = "",
+    thinking_tokens: int | None = None,
 ) -> JudgeReport:
     """One judge call. A runner failure yields an `unreliable` report, never an exception."""
     if kind not in RUBRICS:
         raise ValueError(f"unknown artifact kind {kind!r} (expected one of {sorted(RUBRICS)})")
-    result = runner.run(build_prompt(kind, artifact, idea, extra), cwd=cwd, model=model, max_turns=3)
+    # No tools, one turn: the artifact is in the prompt, so reading files would only add cost.
+    result = runner.run(
+        build_prompt(kind, artifact, idea, extra),
+        cwd=cwd,
+        model=model,
+        tools=[],
+        max_turns=1,
+        thinking_tokens=thinking_tokens,
+    )
     if not result.ok:
         report = JudgeReport(kind=kind, problems=[f"judge call failed: {result.error or 'empty'}"])
     else:
         report = evaluate(kind, result.text, artifact)
+        report.raw = result.text[:6000]
     report.cost_usd, report.model = result.cost_usd, model or ""
     return report

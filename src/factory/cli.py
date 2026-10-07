@@ -278,7 +278,18 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _utf8_console() -> None:
+    """Idea text, judge reports and radar notes contain non-ASCII ('€', '≤'); the Windows console
+    codec (cp1252) would crash on them mid-run, after a billed call. Never fail on output."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass  # captured / replaced stream (tests): nothing to do
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_console()
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

@@ -72,6 +72,43 @@ def test_quote_matching_ignores_markdown_and_whitespace():
     assert evaluate("spec", answer(ALL_FIVE, quote=quote.replace(" ", "  ")), ARTIFACT).verdict == "pass"
 
 
+SPEC_LIKE = """
+- BHV-1: `GET /health` returns 200 {"status": "ok"}.
+  - Given the service is running, When a client calls `GET /health`, Then the response is 200.
+- BHV-2: Submit a valid expense.
+## 6. Non-goals
+- Authentication, authorization, and role checks.
+- Editing or deleting expenses.
+"""
+
+
+@pytest.mark.parametrize(
+    ("quote", "expected"),
+    [
+        # real text, exact
+        ("BHV-2: Submit a valid expense.", True),
+        # a bullet joined to its sub-bullet (the bullet marker is not content)
+        ('BHV-1: `GET /health` returns 200 {"status": "ok"}. Given the service is running', True),
+        # two real passages stitched with an ellipsis, in order
+        ("Authentication, authorization, and role checks ... Editing or deleting expenses.", True),
+        ("Authentication, authorization, and role checks … Editing or deleting expenses", True),
+        # real fragments but in the wrong order: not an excerpt of the document
+        ("Editing or deleting expenses ... Authentication, authorization, and role checks", False),
+        # one real fragment plus one fabricated fragment
+        ("Authentication, authorization, and role checks ... Billing is handled by the ERP system", False),
+        # entirely fabricated, empty, or too short to be evidence
+        ("The system supports multi-currency conversion at ingest", False),
+        ("", False),
+        ("200", False),
+        ("... ...", False),
+    ],
+)
+def test_grounding_accepts_real_excerpts_and_rejects_fabrication(quote, expected):
+    from factory.judge import _norm, is_grounded
+
+    assert is_grounded(quote, _norm(SPEC_LIKE)) is expected
+
+
 def test_missing_and_invalid_criteria_are_reported():
     partial = {"fidelity": 5, "testability": 5}
     rep = evaluate("spec", answer(partial), ARTIFACT)

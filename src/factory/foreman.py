@@ -319,6 +319,7 @@ class Foreman:
             model=self.cfg.models.get("judge"),
             cwd=self.store.dir(item.slug),
             extra=extra,
+            thinking_tokens=self.cfg.judge_thinking_tokens,
         )
         item.cost_usd += report.cost_usd
         item.judgements[kind] = {
