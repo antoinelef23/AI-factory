@@ -72,6 +72,9 @@ def _pyproject(text: str) -> list[str]:
     return [n for n in map(_dep_name, specs) if n]
 
 
+pyproject_dependencies = _pyproject  # public name: the names of every declared dependency
+
+
 def _requirements(text: str) -> list[str]:
     lines = (ln.split("#")[0].strip() for ln in text.splitlines())
     return [n for n in (_dep_name(ln) for ln in lines if ln and not ln.startswith("-")) if n]

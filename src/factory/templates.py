@@ -190,7 +190,8 @@ does so only burns time and breaks working code. T1 already starts from a runnin
 Rules: small tasks; tests before code; use ONLY the stack in design.md section 3; every BHV and INV of
 the spec is implemented by some task. Each task that changes app code also owns its tests: list
 `tests/` in files_touched, and write each EVAL it implements as a test named `test_eval_<n>_...`
-marked `@pytest.mark.eval` (the merge gate runs only those).{ids}{fb}
+marked `@pytest.mark.eval` (the merge gate runs only those). An eval that checks dependencies must
+allow the golden path dependencies listed in design.md section 3, not only the stack table.{ids}{fb}
 {PLAN_FORMAT}
 Output ONLY the markdown of tasks.md (feature: {item.slug}), no commentary, no code fence.
 """

@@ -69,6 +69,7 @@ def render_design(
     choice: DesignChoice,
     gates: list[str],
     spec_version: str,
+    golden_deps: list[str] | None = None,
 ) -> str:
     lines = [
         "---",
@@ -111,6 +112,14 @@ def render_design(
     for cap, t in choice.stack.items():
         status = "IT approval required" if t in choice.needs_approval else "tech radar"
         lines.append(f"| {cap} | {t.name} | {t.ring} | {status} |")
+    if golden_deps:
+        lines += ["", "### Golden path dependencies (pre-approved by IT, in addition to the stack above)", ""]
+        lines += ["| Dependency | Radar |", "|---|---|"]
+        for dep in golden_deps:
+            tech = radar.find(dep)
+            label = f"{tech.name} ({tech.ring})" if tech else "pre-approved by the golden path"
+            lines.append(f"| {dep} | {label} |")
+        lines += ["", "Any check on dependencies (evals, lint) MUST allow these: the golden path ships them."]
     lines += ["", "## 4. Tech radar constraints", ""]
     if choice.needs_approval:
         lines.append("Needs explicit IT approval at this maturity:")

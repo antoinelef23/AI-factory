@@ -17,6 +17,7 @@ from factory.agents import BUILD_TOOLS, READ_ONLY_TOOLS, ClaudeRunner, strip_fen
 from factory.claudo import ClaudoEngine, EngineError, LintResult, load_or_create_secret
 from factory.config import Config
 from factory.design import choose_stack, detect_capabilities, render_design
+from factory.detect import pyproject_dependencies
 from factory.drift import Drift, migration_idea
 from factory.gates import Executor, GateResult, format_report, run_gates, shell_executor
 from factory.guard import check_project, plan_radar_errors
@@ -337,6 +338,7 @@ class Foreman:
             choice=choice,
             gates=self.cfg.gates_for(item.maturity),
             spec_version="0.1.0",
+            golden_deps=self._golden_deps(item),
         )
         self.store.write(item, "design.md", text)
         report = self._design_report(item)
@@ -474,6 +476,14 @@ class Foreman:
 
     def app_dir(self, item: WorkItem) -> Path:
         return self.cfg.apps_dir / item.slug
+
+    def _golden_deps(self, item: WorkItem) -> list[str]:
+        """Runtime and dev dependencies the golden path ships: IT approved them by providing the template."""
+        gp = self._golden_path(item)
+        pyproject = self.cfg.golden_paths_dir / gp / "pyproject.toml" if gp else None
+        if not pyproject or not pyproject.is_file():
+            return []
+        return list(dict.fromkeys(pyproject_dependencies(pyproject.read_text(encoding="utf-8"))))
 
     def _scaffold_files(self, item: WorkItem) -> list[str]:
         """What the app will already contain when the plan starts (the golden path's files)."""

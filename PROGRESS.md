@@ -7,7 +7,7 @@ Plan: [ROADMAP.md](ROADMAP.md). Strategy: [PLANS.md](PLANS.md). How to run: [REA
 **Phase 0 complete. Phase 1 core complete** (P1-1, P1-3, P1-4, P1-6). Local git history only, **nothing pushed**.
 The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
-**Verification command:** `just check` (ruff check + format check + pytest). Last run: **265 passed, 1 skipped** (the skipped one is the billed calibration, `just calibrate`).
+**Verification command:** `just check` (ruff check + format check + pytest). Last run: **296 passed, 1 skipped** (the skipped one is the billed calibration, `just calibrate`).
 Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-ci` green on **Windows and Linux (WSL)**.
 
 ### Roadmap items done
@@ -34,6 +34,7 @@ Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-
 |---|---|---|
 | live1 | single agent, POC expense API | $0.71, 3.5 min, 79 tests, gates first try |
 | live3 | Claudo, POC ping service, cap $3 | **$3.29 for ONE task**, 11 min: planner told "T1 scaffolds", agent redid a working app (overwrote /health, deleted its test), then failed the eval gate (golden test not an eval). Budget cap stopped it cleanly |
+| live5 | Claudo, MVP, **IT rejects at ship review**, rework, approve; cap $3 per run | **works end to end, $4.98** (above my $4 estimate): rejection file consumed by Claudo, T3 reworked, signed token consumed, item shipped. It exposed 3 real gaps, fixed below |
 | live4 | Claudo, MVP ping service, cap $4, after the fixes | **shipped, $2.37**: 3 tasks first attempt ($0.99) + 2 Opus reviews ($1.19) + spec/plan; 13 evals green; radar PASS |
 
 Fixes born from live3: planner told the app is already scaffolded (+ file list), tasks own their tests with
@@ -43,6 +44,19 @@ Fixes born from live3: planner told the app is already scaffolded (+ file list),
 **Cost structure to know:** at MVP the two Opus reviewer calls are 55% of the Claudo spend. The review runs again
 after IT approves (Claudo reviews before polling for the token). Candidates: cheaper reviewer for MVP, skip the
 second review (needs a Claudo change).
+
+### What the reject-path run (live5) exposed, and the fixes
+Claudo's Opus reviewer returned **BLOCK** after the rework and IT approved anyway; reading its report showed why:
+1. The rework (docstrings, README) was **never committed**: Claudo's scoped commits skip files outside a task's
+   `files_touched`. Every gate judged the working tree, but what is delivered (and what a PR will contain) is HEAD.
+   Fix: leftovers are committed in a separate labelled commit after each Claudo run, and a `clean_tree` gate (MVP+)
+   fails on anything uncommitted. Tests also caught a bug in the helper (stripped `status --porcelain` output).
+2. **HEAD failed its own merge gate**: the golden path ships `pydantic`, design section 3 never listed it, so the
+   agent-written eval allowlist rejected it. Fix: design section 3 now lists the golden path dependencies as
+   pre-approved, and the planner is told evals must allow them.
+3. **IT approved a BLOCK blind**: the factory never showed Claudo's reviewer verdict. Fix: verdict recorded and shown
+   by `show`; approving over anything but PASS requires `--note`, recorded with the approval.
+The three fixes are covered by unit tests (the real BLOCK report is a fixture) but were NOT re-run live (~$5).
 
 ### LLM judge (advisory, off by default): calibrated
 `just calibrate` (billed, ~$0.2) scores a known-good, agent-written spec against 4 degraded copies (no evals, no
@@ -62,8 +76,7 @@ examples, an invented requirement, vague outcomes). Findings:
 - CI workflow (needs a push; a push needs Antoine's go-ahead).
 - The judge enabled during a Claudo-built item (`judge = true`) end to end with real models.
 - Sandbox runner (Docker) on Windows; the bind-mount path form is unit-tested only.
-- Claudo reject path against the real orchestrator (`reject_checkpoint` writes the file Claudo documents; the factory
-  flow is tested with a scripted engine, the live runs only exercised approve).
+- The three live5 fixes against a real Claudo run (unit-tested only).
 - Factory + Claudo on Linux (the Claudo suite was run there; the factory suite was not).
 
 ## Open risks / known limits
