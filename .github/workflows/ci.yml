@@ -1,0 +1,18 @@
+# The factory's own merge gate: the same command a developer runs locally.
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: extractions/setup-just@v2
+      - run: uv sync --locked
+      - run: just check

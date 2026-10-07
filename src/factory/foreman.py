@@ -73,6 +73,7 @@ class Foreman:
         if item.status == "blocked":
             item.status = "active"
             item.log("retry", "resuming after block")
+        builds_this_run = 0  # the automatic retry budget is per `run`: a human re-run grants a fresh one
         for _ in range(max_steps):
             step = item.step
             if step.kind == "terminal":
@@ -82,12 +83,24 @@ class Foreman:
                 item.status = "waiting"
                 item.log("waiting", f"{step.role}: {step.summary}")
                 break
+            if step.name == "build":
+                builds_this_run += 1
+                item.build_attempts += 1
             handler = getattr(self, f"_do_{step.name}")
             ok, detail = handler(item)
-            item.log("done" if ok else "failed", detail)
+            item.log("done" if ok else "failed", detail[:600])
             if not ok:
-                item.status = "blocked"
                 item.feedback = detail
+                # Only an agent can act on the gate report; offline, a retry would fail identically.
+                if (
+                    step.name == "gate"
+                    and self.runner is not None
+                    and builds_this_run < self.cfg.max_build_attempts
+                ):
+                    item.log("retry", f"build attempt {builds_this_run + 1}/{self.cfg.max_build_attempts}")
+                    item.stage, item.status = "build", "active"
+                    continue
+                item.status = "blocked"
                 break
             self._advance(item)
         self.store.save(item)
@@ -334,10 +347,9 @@ class Foreman:
         self.store.write(item, "gate-report.md", format_report(results, item.maturity))
         failed = [r for r in results if not r.ok]
         if failed:
-            item.stage = "build"  # the next `run` rebuilds with the gate report as feedback
-            return False, "gates failed: " + "; ".join(
-                f"{r.name}: {r.detail.splitlines()[0]}" for r in failed
-            )
+            item.stage = "build"  # the next build gets this detail as feedback
+            detail = "\n\n".join(f"[{r.name}] {r.detail}" for r in failed)
+            return False, "gates failed:\n" + detail[-3000:]
         return True, "gates passed: " + ", ".join(r.name for r in results)
 
 

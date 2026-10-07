@@ -24,6 +24,33 @@ class FakeExecutor:
         return self.rc, self.out
 
 
+class ScriptedExecutor:
+    """Command gate results in order (last one repeats): e.g. fail, fail, pass."""
+
+    def __init__(self, results: list[tuple[int, str]]) -> None:
+        self.results, self.calls = list(results), 0
+
+    def __call__(self, command: str, cwd: Path) -> tuple[int, str]:
+        res = self.results[min(self.calls, len(self.results) - 1)]
+        self.calls += 1
+        return res
+
+
+class FakeAgentRunner:
+    """Stands in for ClaudeRunner: records prompts, never touches the network."""
+
+    name = "claude"
+
+    def __init__(self, text: str = "built it") -> None:
+        self.text, self.prompts = text, []
+
+    def run(self, prompt: str, **kw):
+        from factory.agents import AgentResult
+
+        self.prompts.append((prompt, kw))
+        return AgentResult(True, self.text, 0.01)
+
+
 @pytest.fixture
 def factory_root(tmp_path: Path) -> Path:
     """A throwaway factory: the real factory.toml, radar and golden paths, empty work/apps."""

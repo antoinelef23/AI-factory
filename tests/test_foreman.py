@@ -102,6 +102,54 @@ def test_it_exception_and_promotion(foreman):
     assert (item.stage, item.status) == ("design_review", "waiting")
 
 
+def reach_build(foreman, runner):
+    foreman.runner = runner
+    item = foreman.run(foreman.intake("X", "an api", "poc"))
+    return foreman.approve(item, "business")  # -> plan_review (waiting)
+
+
+def test_agent_build_retries_after_failed_gate_then_succeeds(foreman):
+    from tests.conftest import FakeAgentRunner, ScriptedExecutor
+
+    runner = FakeAgentRunner()
+    foreman.executor = ScriptedExecutor([(1, "FAILED test_x"), (0, "ok")])
+    item = reach_build(foreman, runner)
+    item = foreman.approve(item, "owner")  # build -> gate fails -> auto retry -> gate passes
+    assert (item.stage, item.status) == ("ship_review", "waiting")
+    assert item.build_attempts == 2
+    build_prompts = [p for p, kw in runner.prompts if "implementer" in p]
+    assert len(build_prompts) == 2
+    assert "FAILED test_x" not in build_prompts[0]
+    assert "FAILED test_x" in build_prompts[1]  # the failing output is fed to the second attempt
+    assert [h["event"] for h in item.history].count("retry") == 1
+
+
+def test_agent_build_stops_after_max_attempts(foreman):
+    from tests.conftest import FakeAgentRunner, ScriptedExecutor
+
+    foreman.executor = ScriptedExecutor([(1, "still red")])
+    item = reach_build(foreman, FakeAgentRunner())
+    item = foreman.approve(item, "owner")
+    assert (item.stage, item.status) == ("build", "blocked")
+    assert item.build_attempts == foreman.cfg.max_build_attempts == 3
+    assert "still red" in item.feedback
+    # A human re-run grants a fresh budget.
+    foreman.executor = ScriptedExecutor([(0, "green")])
+    item = foreman.run(item)
+    assert (item.stage, item.status) == ("ship_review", "waiting")
+    assert item.build_attempts == 4
+
+
+def test_offline_build_does_not_retry(foreman, executor):
+    executor.rc, executor.out = 1, "red"
+    item = foreman.run(foreman.intake("X", "an api", "poc"))
+    item = foreman.approve(item, "business")
+    item = foreman.approve(item, "owner")
+    assert item.status == "blocked"
+    assert item.build_attempts == 1
+    assert len(executor.calls) == 1
+
+
 def test_claude_runner_path_uses_agent_output(foreman):
     class FakeRunner:
         name = "claude"

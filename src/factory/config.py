@@ -31,6 +31,7 @@ class Config:
     golden_paths_dir: Path = Path("golden_paths")
     runner: str = "offline"
     max_turns_build: int = 40
+    max_build_attempts: int = 3
     models: dict[str, str] = field(default_factory=dict)
     gates: dict[str, list[str]] = field(default_factory=lambda: dict(DEFAULT_GATES))
     gate_commands: dict[str, str] = field(default_factory=dict)
@@ -72,6 +73,7 @@ def load_config(root: Path) -> Config:
         golden_paths_dir=root / f.get("golden_paths_dir", "golden_paths"),
         runner=agent.get("runner", "offline"),
         max_turns_build=int(agent.get("max_turns_build", 40)),
+        max_build_attempts=max(1, int(agent.get("max_build_attempts", 3))),
         models=dict(agent.get("models", {})),
         gate_commands=dict(gates.get("commands", {})),
     )
