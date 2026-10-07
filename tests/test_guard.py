@@ -92,7 +92,10 @@ def test_design_doc_ignore_block_is_not_usage(tmp_path, radar):
 def test_secrets_gate(tmp_path):
     write(tmp_path, "app/ok.py", 'import os\nTOKEN = os.environ["TOKEN"]\n')
     assert secrets_gate(tmp_path).ok
-    write(tmp_path, "app/bad.py", 'api_key = "sk-ant-abcdefghijklmnopqrstuvwxyz123456"\n')
+    fake_key = (
+        "sk-ant-" + "abcdefghijklmnopqrstuvwxyz123456"
+    )  # assembled: never a token-shaped literal in source
+    write(tmp_path, "app/bad.py", f'api_key = "{fake_key}"\n')
     result = secrets_gate(tmp_path)
     assert not result.ok
     assert "app/bad.py:1" in result.detail
