@@ -47,6 +47,12 @@ just check          # verification: lint + format + tests (offline, ~5 s)
 
 ## Test it tonight
 
+### 0. The 5-second proof (free)
+
+```powershell
+uv run factory demo      # self-checking: MongoDB replaced, Flask caught, Django escalated to IT, merge stays human
+```
+
 ### 1. Offline run (free, about 1 minute)
 
 ```powershell
@@ -87,13 +93,52 @@ uv run factory approve expense-tracker --as it
 - **IT changes the radar:** move `fastapi` to `hold` in `radar.toml` and re-run `factory check apps/<slug>`.
 - **Claudo handoff:** `uv run factory export <slug> --claudo C:\Users\Antoine\Projets\AI-Workflow-gates\_build`.
 
+## Claudo: plan validation, audited builds, signed approvals
+
+The factory finds a [Claudo](https://github.com/antoinelef23/Claudo) checkout on its own (`[engine] claudo`
+in `factory.toml`, else `$CLAUDO_HOME`, else a sibling `../AI-Workflow-gates/_build` or `../Claudo`) and then:
+
+| Stage | What Claudo adds |
+|---|---|
+| plan | Every `tasks.md` is checked by **Claudo's own plan-lint** (the factory does not re-implement it). An agent plan that fails is re-prompted with the lint errors (`plan_lint_retries`), then blocked. |
+| build (MVP and above) | The orchestrator runs the approved plan **task by task**: dependency DAG, per-task verify, eval gate, reviewer panel, one scoped git commit per task. Below `build_from` (default `mvp`) a single agent builds: see costs. |
+| ship | The factory stops the orchestrator where it pauses for its human checkpoint, runs its own gates, and parks the item at IT's ship review. IT's approval writes a **signed (HMAC) token** carrying the approver's name; the secret lives in `.factory/` (git-ignored, outside every app). An agent cannot self-approve. |
+
+No Claudo found: the factory still runs, plans are simply not linted and everything builds with the single agent.
+
+## LLM judge (advisory)
+
+`[agent] judge = true` (billed) scores each spec, plan and build against a rubric. It **never blocks**: it tells the
+human reviewer where an artifact looks weak. Every score must quote the artifact verbatim (checked by code,
+ungrounded scores are discarded), the verdict is computed from the scores, and the judge uses a different, cheaper
+model than the generators. `uv run factory judge <slug> --kind spec|plan|build` runs it on demand.
+
+## What it costs (measured, Sonnet generators)
+
+| Path | Result |
+|---|---|
+| single agent, whole 7-module expense API (POC) | **$0.71**, ~3.5 min, gates green first try |
+| plan written by an agent | ~$0.15, passes Claudo's plan-lint first try |
+| judge call (haiku, default thinking) | $0.05 to $0.09 per artifact |
+| Claudo, one task, before the planner was told the app already exists | **$3.29**, 11 min (two attempts) |
+
+Claudo's per-task rigor is several times the single agent, so it is reserved for MVP and above (`build_from`) and
+capped per run (`[engine] budget_usd`). Measure your own: `item.json` records `cost_usd` per item.
+
+## On Windows
+
+Everything runs natively (Python 3.12+, uv, just, Git Bash). `just check` and Claudo's `just gate-ci` are green on
+Windows and Linux. See Claudo's `docs/how-to/run-on-windows.md` for the quirks (`python3` Store stub, WSL `bash`,
+cp1252, CRLF).
+
 ## Layout
 
 ```
-factory.toml        factory definition (runner, models, gates per maturity)
+factory.toml        factory definition (runner, models, gates per maturity, [engine])
 radar.toml          company tech radar (IT-owned)
-golden_paths/       IT project templates (python-fastapi)
-src/factory/        radar, detect, guard, gates, design compiler, foreman, agents, cli
-work/<slug>/        one folder per work item: item.json + idea/spec/design/tasks/gate-report
-apps/<slug>/        shipped apps
+golden_paths/       IT project templates (python-fastapi: app, evals, justfile, CI, Dockerfile)
+src/factory/        radar, detect, guard, gates, design compiler, foreman, agents, judge, claudo bridge, cli
+work/<slug>/        one folder per work item: item.json + idea/spec/design/tasks/gate-report/judge-*/plan-lint
+apps/<slug>/        shipped apps (each its own git repo once built through Claudo)
+.factory/           factory secrets (git-ignored)
 ```

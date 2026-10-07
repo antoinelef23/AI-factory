@@ -4,53 +4,68 @@ Plan: [ROADMAP.md](ROADMAP.md). Strategy: [PLANS.md](PLANS.md). How to run: [REA
 
 ## State (2026-10-07)
 
-**Phase 0 complete.** MVP v0.1 plus: automatic build retries, `factory demo`, advisory LLM judge, CI,
-Apache-2.0 license. Local git history only, **nothing pushed**.
+**Phase 0 complete. Phase 1 core complete** (P1-1, P1-3, P1-4, P1-6). Local git history only, **nothing pushed**.
+The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
-**Verification command:** `just check` (ruff check + ruff format --check + pytest).
-Last run: all checks passed, **87 tests passed**.
+**Verification command:** `just check` (ruff check + format check + pytest). Last run: **151 passed**.
+Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-ci` green on **Windows and Linux (WSL)**.
 
-### Phase 0 work items
+### Roadmap items done
 
 | ID | Status | Evidence |
 |---|---|---|
-| P0-1 live run | done (1 item, see below) | live1 expense-tracker: $0.71, 79 tests green first try |
-| P0-2 friction fixes | done | cp1252 console crash on non-ASCII output; judge cost/leniency (below) |
-| P0-3 build retries | done | `max_build_attempts`, gate output fed back; 3 tests incl. exhaustion and offline no-retry |
-| P0-4 `factory demo` | done | self-checking, 0.5 s, fails if the radar is weakened (test) |
-| P0-5 license + first commit | done | Apache-2.0 (D1 default taken), commits `66ab041`... |
-| P0-6 CI | written, **not run** | `.github/workflows/ci.yml` (ubuntu + windows); needs a push to verify |
+| P0-1..6 | done | see git log; CI workflow written but **never run** (needs a push) |
+| P1-1 Claudo on Windows | done | `fcntl` lock -> `oslock`; runner finds `claude.exe`; Git-Bash `find_bash`; `LAB_PYTHON`; UTF-8 decoding; posix feature keys. 54 failing tests -> 0, Linux control run green before and after |
+| P1-3 plan validated by Claudo | done | factory runs Claudo's real `--validate`; offline plan lints clean at all 4 maturities; live agent plan passed first try (10 nodes) and an independent lint agrees |
+| P1-4 build through Claudo | done | live MVP item shipped: 3 tasks first attempt, 13 evals green, per-task commits |
+| P1-6 signed approvals | done | live: token `approved_by=Bob`, payload bound to CP-1, consumed by Claudo; secret in `.factory/`, outside the app |
+| P1-2 package engine | **replaced** | the factory *discovers* Claudo (config / `CLAUDO_HOME` / sibling) instead of vendoring it; decision D2 revised, no monorepo |
+| P1-5, P1-7, P1-8, P1-9, P1-10 | open | see Next |
 
-### Live run data (P0-1), one POC item, Sonnet 5.5 generators
-Idea: expense API with a "receipt above 500 EUR" rule. Scratch copy, not committed.
-- Spec 35 s / $0.11. Plan 49 s. Build 2 min 5 s / $0.45. Whole item **$0.71**, ~3.5 min of agent time.
-- Gates passed on the **first attempt** (radar, secrets, 79 pytest). App: 635 lines, 7 modules, 9 test files.
-- Spec quality was high (12 BHV, 8 INV, boundary examples 500.00 / 500.01) but it **invented** requirements:
-  a p95 < 500 ms KPI, a fixed category list, a 1,000,000 EUR cap, a 2-decimal rule.
-- Capability detection missed persistence (idea says "list by employee and month", no keyword): no database in
-  the stack, the agent used an in-memory store. Acceptable for POC, wrong for MVP (ROADMAP P3-9).
+### Live runs and what they taught (all in scratch copies, not committed)
 
-### LLM judge findings (advisory, off by default)
-- Haiku as judge, same spec, default thinking: $0.08, fidelity 3 after the rubric was sharpened (caught the
-  invented requirements). Thinking budget 3000: $0.05, fidelity 4. Budget 0: $0.02, fidelity 5, **missed them**.
-  Conclusion: cheap judging is a false economy; judge thinking left at the model default.
-- 93% of a judge call's cost was hidden thinking tokens (11k of 12k output tokens), not input or tools.
-- Quote grounding rejected valid evidence because judges stitch passages with "..."; now every fragment must
-  occur in the artifact, in order. A previously "unreliable" real answer re-scores as pass (4.7).
-- n = 1 per setting: indicative, not statistically sound. Next step is a calibration set (see Next).
+| Run | What | Result |
+|---|---|---|
+| live1 | single agent, POC expense API | $0.71, 3.5 min, 79 tests, gates first try |
+| live3 | Claudo, POC ping service, cap $3 | **$3.29 for ONE task**, 11 min: planner told "T1 scaffolds", agent redid a working app (overwrote /health, deleted its test), then failed the eval gate (golden test not an eval). Budget cap stopped it cleanly |
+| live4 | Claudo, MVP ping service, cap $4, after the fixes | **shipped, $2.37**: 3 tasks first attempt ($0.99) + 2 Opus reviews ($1.19) + spec/plan; 13 evals green; radar PASS |
 
-## Not verified yet
+Fixes born from live3: planner told the app is already scaffolded (+ file list), tasks own their tests with
+`test_eval_<n>` + `@pytest.mark.eval`, golden health test is an eval, Claudo engages from `build_from = "mvp"`
+(POV/POC use the single agent), Claudo spend is read from its journal into the item cost.
+
+**Cost structure to know:** at MVP the two Opus reviewer calls are 55% of the Claudo spend. The review runs again
+after IT approves (Claudo reviews before polling for the token). Candidates: cheaper reviewer for MVP, skip the
+second review (needs a Claudo change).
+
+### LLM judge (advisory, off by default)
+- 93% of a judge call's cost is hidden thinking; capping thinking (3000 or 0) saved money but **missed invented
+  requirements** (fidelity 5 vs 3), so the default stays at the model default (n = 1 per setting: indicative).
+- Quote grounding rejected valid evidence because judges stitch passages with "..."; every fragment must now occur in
+  order. Judge still never blocks.
+
+## Not verified
 - CI workflow (needs a push; a push needs Antoine's go-ahead).
-- Runs with the judge enabled end to end (`judge = true`) against the real model.
-- Claudo integration (Phase 1): `factory export` was never run through Claudo's orchestrator.
+- The judge enabled during a Claudo-built item (`judge = true`) end to end with real models.
+- Sandbox runner (Docker) on Windows; the bind-mount path form is unit-tested only.
+- Claudo reject path against the real orchestrator (`reject_checkpoint` writes the file Claudo documents; the factory
+  flow is tested with a scripted engine, the live runs only exercised approve).
+- Factory + Claudo on Linux (the Claudo suite was run there; the factory suite was not).
 
 ## Open risks / known limits
-- Roles are self-declared (`--as it`): no identity or signature until P1-6.
-- Keyword capability detection (see above).
-- Judge n = 1 calibration; a judge that rubber-stamps would erode trust in checkpoints.
-- Claudo's `just gate-ci` is red on native Windows (`fcntl` in orchestrate.py): Phase 1 starts there.
+- Roles are self-declared (`--as it`): the signed token proves the factory wrote it, not who the human was.
+- Approval secret is held by the orchestrator process on the host, so a host agent with code execution could read it
+  (Claudo's documented residual M4; the sandbox runner is the fix, ROADMAP P1-7).
+- Capability detection is keyword-based (idea with "list by employee and month" got no database in live1).
+- Spec/design immutability during a build is a prompt rule only: an agent could edit `work/<slug>/spec.md` inside the
+  app. Mechanical check is the next task.
+- Claudo's two Opus reviews dominate MVP cost (above).
 - Only one golden path (python-fastapi).
 
-## Next step
-Phase 1, P1-1: port Claudo's `fcntl` lock to a cross-platform lock in `AI-Workflow-gates/_build`
-(separate repo), get its `just gate-ci` green on Windows, then P1-2 onward (see ROADMAP).
+## Next steps (in order)
+1. **Spec/design immutability gate** (free, deterministic): hash spec/design at approval, fail the gate if the app's
+   copy or the store's copy changed.
+2. **Trajectory guard** as an MVP+ gate (Claudo's `trajectory_guard.py`: HOW the run happened, journal + git).
+3. P1-7 sandbox runner by default for MVP+ builds, then re-check the live path.
+4. Ask Antoine before spending more: a live run through the reject path (~$3-4) and `judge = true` end to end (~$0.5).
+5. Phase 2 (real delivery: git repo, PR, GitHub issue intake) needs decisions D3/D6 and a push go-ahead.
