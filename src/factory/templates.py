@@ -87,6 +87,7 @@ covers: [BHV-1]
 | EVAL-1 | deterministic | `GET /health` returns 200 and status ok | BHV-1 | 100% |
 | EVAL-2 | deterministic | radar gate passes at `{item.maturity}` | INV-1 | 100% |
 | EVAL-3 | deterministic | secrets gate passes | INV-2 | 100% |
+| EVAL-4 | deterministic | a test proves the main use case of the intent | BHV-2 | 100% |
 """
 
 
@@ -122,7 +123,7 @@ design: ./design.md      # version: 0.1.0
 
 ### T2 — Evals and gates
 - **depends_on :** [T1]
-- **implements :** [INV-2, EVAL-1, EVAL-2, EVAL-3]
+- **implements :** [INV-2, EVAL-1, EVAL-2, EVAL-3, EVAL-4]
 - **files_touched :** `tests/`
 - **verify :** `uv run pytest -q`
 - **done_when :** every eval of spec.md section 7 passes at maturity `{item.maturity}`.
@@ -141,7 +142,8 @@ def spec_prompt(item: WorkItem, feedback: str) -> str:
     return f"""You are the spec writer of a governed AI software factory.
 Read idea.md in the current directory. Write spec.md for it, in the format below.
 Rules: every statement testable with a stable ID (INV-n, BHV-n, EX-n, EVAL-n); no vague words
-without numbers; realistic examples; explicit non-goals; one eval per BHV/INV.
+without numbers; realistic examples; explicit non-goals; one eval per BHV/INV: every INV and every BHV must
+appear in the Covers column of at least one EVAL row, and each ID is defined exactly once.
 Always include BHV-1 = `GET /health` returns 200 {{"status": "ok"}} and
 INV-1 = only technologies allowed by the company tech radar at maturity `{item.maturity}`.
 Do not choose technologies: that is the design's job.{fb}
@@ -349,7 +351,8 @@ def change_spec_prompt(item: WorkItem, feedback: str, existing_spec: str) -> str
 Read idea.md in the current directory. It asks for a {item.kind} to the EXISTING app `{item.target}`.
 Write spec.md for the CHANGE only: its delta, never the app as a whole.{known}
 Rules: every statement testable with a stable ID (INV-n, BHV-n, EX-n, EVAL-n); no vague words without
-numbers; realistic examples; explicit non-goals; one eval per BHV/INV. Always include
+numbers; realistic examples; explicit non-goals; one eval per BHV/INV: every INV and every BHV must appear
+in the Covers column of at least one EVAL row, and each ID is defined exactly once. Always include
 INV-1 = only technologies allowed by the company tech radar at maturity `{item.maturity}`,
 INV-3 = existing behavior does not change except as the spec states and the existing tests stay green, and
 BHV-1 = no regression (the existing test suite still passes). Do not choose technologies.{fb}

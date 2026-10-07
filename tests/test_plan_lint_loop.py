@@ -2,6 +2,7 @@ import pytest
 
 from factory.agents import AgentResult
 from factory.claudo import LintResult
+from tests.conftest import VALID_SPEC
 
 GOOD = "---\ntype: tasks\nstatus: proposed\n---\n### T1 — good plan\n- **depends_on :** []\n"
 BAD = "# Tasks: not the Claudo format\n### T1: bad plan\n"
@@ -18,7 +19,7 @@ class Scripted:
     def run(self, prompt, **kw):
         self.prompts.append(prompt)
         if "spec writer" in prompt:
-            return AgentResult(True, "# Spec\n- **INV-1** — x\n- **BHV-1** — y\n", 0.01)
+            return AgentResult(True, VALID_SPEC, 0.01)
         if "implementer" in prompt:  # the build stage after the owner approves
             return AgentResult(True, "built", 0.01)
         return AgentResult(True, self.plans.pop(0), 0.01)
@@ -76,7 +77,10 @@ def test_plan_prompt_carries_the_format_and_the_real_spec_ids(foreman):
     to_plan(foreman, runner, FakeEngine())
     prompt = next(p for p in runner.prompts if "planner of" in p)
     assert "EXACT FORMAT" in prompt and "### T1 — Short title" in prompt and "EM DASH" in prompt
-    assert "Spec IDs you may reference in `implements`: BHV-1, INV-1." in prompt
+    from factory.templates import SPEC_ID
+
+    ids = ", ".join(sorted(set(SPEC_ID.findall(VALID_SPEC))))
+    assert f"Spec IDs you may reference in `implements`: {ids}." in prompt and "BHV-2" in ids
 
 
 def test_retries_are_bounded_then_the_item_blocks_with_the_errors(foreman):

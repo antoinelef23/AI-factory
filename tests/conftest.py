@@ -8,7 +8,15 @@ import pytest
 from factory.config import load_config
 from factory.foreman import Foreman
 from factory.radar import load_radar
-from factory.workitem import Store
+from factory.templates import offline_change_spec, offline_spec
+from factory.workitem import Store, WorkItem
+
+# Specs that pass the structural lint: what a well-behaved spec-writing agent answers. The factory's own
+# offline templates are proven lint-clean (tests/test_spec_lint.py), so test doubles reuse them.
+VALID_SPEC = offline_spec(WorkItem(slug="x", title="X", idea="an api", maturity="poc"))
+VALID_CHANGE_SPEC = offline_change_spec(
+    WorkItem(slug="y", title="Y", idea="change it", maturity="poc", kind="feature", target="x")
+)
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -48,6 +56,8 @@ class FakeAgentRunner:
         from factory.agents import AgentResult
 
         self.prompts.append((prompt, kw))
+        if "spec writer" in prompt:
+            return AgentResult(True, VALID_CHANGE_SPEC if "EXISTING app" in prompt else VALID_SPEC, 0.01)
         return AgentResult(True, self.text, 0.01)
 
 

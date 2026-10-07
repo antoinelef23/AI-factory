@@ -12,7 +12,7 @@ branch tracks `portable` and `remote.pushDefault = portable` so a plain `git pus
 **CI is green** on GitHub (Windows + Ubuntu for the factory; Claudo's own gate workflow on Linux).
 The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
-**Verification command:** `just check` (ruff check + format check + pytest). Last run: **347 passed, 1 skipped** (also green in GitHub CI on Windows and Ubuntu; the real-engine integration tests skip there because no Claudo checkout is present) (the skipped one is the billed calibration, `just calibrate`).
+**Verification command:** `just check` (ruff check + format check + pytest). Last run: **373 passed, 1 skipped** (also green in GitHub CI on Windows and Ubuntu; the real-engine integration tests skip there because no Claudo checkout is present) (the skipped one is the billed calibration, `just calibrate`).
 Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-ci` green on **Windows and Linux (WSL)**.
 
 ### Roadmap items done
@@ -32,6 +32,7 @@ Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-
 | P3-7 exceptions with expiry | done | design-review exceptions lapse after `[policy] exception_days` (180), `allow --expires --reason`; the build gate and drift ignore lapsed ones; mutation-checked |
 | P3-1 radar importer (partial) | done | `radar-import` for CSV/JSON (BYOR style, `;`/tab delimiters, BOM, French ring names); validated through the factory's own loader; imported radar drives a full item |
 | P2-6 change an existing app | done | `change`/`merge`/`abandon`; branch `factory/<slug>`, fast-forward-only merge by IT; migrations from `drift --open` are runnable; full story tested with an agent that really edits the app (migrate -> approve -> merge -> drift clean); fast-forward rule mutation-checked |
+| Spec structural lint | done | closes the judge's measured blind spot (missing evals table): `lint_spec` + re-prompt loop; 0 false positives on 2 real agent specs; it found a real hole in the offline template (BHV-2 had no eval); coverage rule mutation-checked |
 | P1-7, P1-10 | open | see Next |
 
 ### Live runs and what they taught (all in scratch copies, not committed)

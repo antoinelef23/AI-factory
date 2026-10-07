@@ -42,6 +42,7 @@ from factory.project import (
     prepare_project,
 )
 from factory.radar import BLOCK, MATURITIES, Radar, verdict
+from factory.speclint import lint_spec
 from factory.templates import (
     SPEC_ID,
     build_prompt,
@@ -356,20 +357,41 @@ class Foreman:
         )
 
     def _do_spec(self, item: WorkItem) -> tuple[bool, str]:
-        if item.kind != "app":
-            existing = self._read_app_file(item, f"work/{item.target}/spec.md")
-            offline, prompt = offline_change_spec(item), change_spec_prompt(item, item.feedback, existing)
-        else:
-            offline, prompt = offline_spec(item), None
-        if self.runner is None:
-            text = offline
-        else:
-            ok, text = self._ask_agent(item, prompt or spec_prompt(item, item.feedback), "spec")
-            if not ok:
-                return False, text
+        """Write spec.md. It must pass the structural lint before a human sees it: an agent spec that fails is
+        re-prompted with the errors (spec_lint_retries), then blocked."""
+        feedback, tries = item.feedback, 0
+        while True:
+            if item.kind != "app":
+                existing = self._read_app_file(item, f"work/{item.target}/spec.md")
+                offline = offline_change_spec(item)
+                prompt = change_spec_prompt(item, feedback, existing)
+            else:
+                offline, prompt = offline_spec(item), spec_prompt(item, feedback)
+            if self.runner is None:
+                text = offline
+            else:
+                ok, text = self._ask_agent(item, prompt, "spec")
+                if not ok:
+                    return False, text
+            lint = lint_spec(text, kind=item.kind)
+            if lint.ok:
+                break
+            if self.runner is None or tries >= self.cfg.spec_lint_retries:
+                self.store.write(item, "spec.md", text)  # kept for the human to inspect
+                where = "offline template" if self.runner is None else f"{tries + 1} attempt(s)"
+                return False, f"spec failed the structural lint ({where}):\n{lint.feedback()}"
+            tries += 1
+            item.log("lint", f"spec lint: {len(lint.errors)} error(s), re-prompting ({tries})")
+            feedback = (
+                f"{item.feedback}\nYour previous spec.md FAILED the structural lint. Fix every error:\n"
+                f"{lint.feedback()}\n\nYour previous spec.md was:\n{text}"
+            )
         self.store.write(item, "spec.md", text)
+        if lint.warnings:
+            self.store.write(item, "spec-lint.md", f"# Spec lint (warnings)\n\n{lint.feedback()}\n")
         self.judge_artifact(item, "spec")
-        return True, "spec.md written" + (" (offline template)" if self.runner is None else "")
+        mode = "offline template" if self.runner is None else f"agent, {tries} lint retries"
+        return True, f"spec.md written ({mode})"
 
     def _design_report(self, item: WorkItem):
         d = self.store.dir(item.slug)

@@ -2,6 +2,7 @@ import pytest
 
 from factory.agents import AgentResult
 from factory.foreman import FactoryError
+from tests.conftest import VALID_SPEC
 
 
 def ship_poc(foreman, idea="A page where support agents log customer callbacks"):
@@ -159,10 +160,10 @@ def test_claude_runner_path_uses_agent_output(foreman):
 
         def run(self, prompt, **kw):
             self.prompts.append((prompt, kw))
-            return AgentResult(True, "```markdown\n# Spec: generated\n```", 0.05)
+            return AgentResult(True, "```markdown\n" + VALID_SPEC + "```", 0.05)
 
     foreman.runner = FakeRunner()
     item = foreman.run(foreman.intake("X", "an api", "poc"))
-    assert foreman.store.read(item, "spec.md") == "# Spec: generated\n"
+    assert foreman.store.read(item, "spec.md") == VALID_SPEC.strip() + "\n"  # the code fence was unwrapped
     assert item.cost_usd == pytest.approx(0.05)
     assert "maturity `poc`" in foreman.runner.prompts[0][0]

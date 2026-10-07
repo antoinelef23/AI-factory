@@ -150,6 +150,14 @@ in `factory.toml`, else `$CLAUDO_HOME`, else a sibling `../AI-Workflow-gates/_bu
 
 No Claudo found: the factory still runs, plans are simply not linted and everything builds with the single agent.
 
+## Spec lint (deterministic, before any human)
+
+Every spec must pass a structural lint: all seven sections, every invariant and behavior covered by an eval in the
+`Covers` column, IDs unique, and what the factory mandates (the radar invariant, `GET /health` for a new app, "no
+regression" for a change). An agent-written spec that fails is re-prompted with the errors (`[policy] spec_lint_retries`,
+default 2), then blocked. It exists because the judge below is weakest at noticing what is *missing*; it deliberately
+does not judge meaning (an invented requirement that has its own eval is structurally flawless).
+
 ## LLM judge (advisory)
 
 `[agent] judge = true` (billed) scores each spec, plan and build against a rubric. It **never blocks**: it tells the

@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 from factory.claudo import BuildResult, ClaudoEngine, EngineError, LintResult, load_or_create_secret
-from tests.conftest import FakeAgentRunner
+from tests.conftest import VALID_SPEC, FakeAgentRunner
 
 OK_PLAN = "---\ntype: tasks\nstatus: proposed\n---\n### T1 — Build\n- **depends_on :** []\n"
 
@@ -57,7 +57,7 @@ class PlanThenBuildAgent(FakeAgentRunner):
 
         self.prompts.append((prompt, kw))
         if "spec writer" in prompt:
-            return AgentResult(True, "# Spec\n- **INV-1** — x\n", 0.01)
+            return AgentResult(True, VALID_SPEC, 0.01)
         if "planner of" in prompt:
             return AgentResult(True, OK_PLAN, 0.01)
         return AgentResult(True, "fixed", 0.02)

@@ -7,10 +7,10 @@ from factory.cli import main
 from factory.drift import scan_drift
 from factory.foreman import FactoryError
 from factory.project import current_branch, porcelain
+from tests.conftest import VALID_CHANGE_SPEC
 from tests.test_claudo_build import ScriptedClaudo
 from tests.test_drift import radar_with, ship
 
-SPEC = "# Spec\n- **INV-1**: radar compliant\n- **BHV-2**: the change\n"
 PLAN = (
     "---\ntype: tasks\nstatus: proposed\n---\n### T1 - Change\n- **depends_on :** []\n"
     "- **prompt :**\n  > Make the change.\n"
@@ -34,7 +34,7 @@ class ChangeAgent:
     def run(self, prompt, **kw):
         self.prompts.append(prompt)
         if "spec writer" in prompt:
-            return AgentResult(True, SPEC, 0.01)
+            return AgentResult(True, VALID_CHANGE_SPEC, 0.01)
         if "planner of" in prompt:
             return AgentResult(True, PLAN, 0.01)
         if self.edit and "implementer" in prompt:
