@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 
 from factory.agents import BUILD_TOOLS, READ_ONLY_TOOLS, ClaudeRunner, strip_fences
+from factory.claudo import ClaudoEngine, LintResult
 from factory.config import Config
 from factory.design import choose_stack, detect_capabilities, render_design
 from factory.gates import Executor, format_report, run_gates, shell_executor
@@ -18,6 +19,7 @@ from factory.guard import check_project
 from factory.judge import judge
 from factory.radar import BLOCK, MATURITIES, Radar, verdict
 from factory.templates import (
+    SPEC_ID,
     build_prompt,
     idea_md,
     offline_spec,
@@ -43,12 +45,14 @@ class Foreman:
         store: Store,
         runner: ClaudeRunner | None = None,
         executor: Executor = shell_executor,
+        engine: ClaudoEngine | None = None,
     ) -> None:
         self.cfg = cfg
         self.radar = radar
         self.store = store
         self.runner = runner
         self.executor = executor
+        self.engine = engine  # Claudo: validates every plan with its own plan-lint when present
 
     # ------------------------------------------------------------------ intake
     def intake(self, title: str, idea: str, maturity: str = "poc", requester: str = "business") -> WorkItem:
@@ -130,6 +134,8 @@ class Foreman:
         if item.stage == "design_review":
             pending = self._design_report(item).needs_approval()
             item.it_exceptions = sorted(set(item.it_exceptions) | {v.key for v in pending})
+        if item.stage == "plan_review":
+            self._mark_plan_approved(item, by)
         item.approvals.append({"stage": item.stage, "role": role, "by": by or role, "note": note})
         item.log("approved", f"{role} {by}".strip() + (f": {note}" if note else ""))
         item.feedback = ""
@@ -259,16 +265,54 @@ class Foreman:
         gaps = f"; radar gaps: {', '.join(choice.gaps)}" if choice.gaps else ""
         return True, f"stack from radar: {stack}{extra}{gaps}"
 
+    def _lint(self, item: WorkItem, tasks: str) -> LintResult | None:
+        if self.engine is None:
+            return None
+        s = self.store
+        return self.engine.lint_plan(
+            item.slug, spec=s.read(item, "spec.md"), design=s.read(item, "design.md"), tasks=tasks
+        )
+
     def _do_plan(self, item: WorkItem) -> tuple[bool, str]:
-        if self.runner is None:
-            text = offline_tasks(item, self._golden_path(item))
-        else:
-            ok, text = self._ask_agent(item, plan_prompt(item, item.feedback), "plan")
-            if not ok:
-                return False, text
+        """Write tasks.md. With Claudo available the plan must pass ITS plan-lint before a human sees
+        it: an agent plan is re-prompted with the lint errors (plan_lint_retries), then blocked."""
+        spec_ids = sorted(set(SPEC_ID.findall(self.store.read(item, "spec.md"))))
+        feedback, lint, tries = item.feedback, None, 0
+        while True:
+            if self.runner is None:
+                text = offline_tasks(item, self._golden_path(item))
+            else:
+                ok, text = self._ask_agent(item, plan_prompt(item, feedback, spec_ids), "plan")
+                if not ok:
+                    return False, text
+            lint = self._lint(item, text)
+            if lint is None or lint.ok:
+                break
+            if self.runner is None or tries >= self.cfg.plan_lint_retries:
+                self.store.write(item, "tasks.md", text)  # keep it for the human to inspect
+                where = "offline template" if self.runner is None else f"{tries + 1} attempt(s)"
+                return False, f"plan rejected by Claudo plan-lint ({where}):\n{lint.feedback()}"
+            tries += 1
+            item.log("lint", f"plan-lint: {len(lint.errors)} error(s), re-prompting ({tries})")
+            feedback = (
+                f"{item.feedback}\nYour previous tasks.md FAILED Claudo's plan-lint. Fix every error:\n"
+                f"{lint.feedback()}\n\nYour previous tasks.md was:\n{text}"
+            )
         self.store.write(item, "tasks.md", text)
+        if lint is not None:
+            self.store.write(item, "plan-lint.md", f"# Claudo plan-lint\n\n{lint.feedback() or 'clean'}\n")
         self.judge_artifact(item, "plan")
-        return True, "tasks.md written" + (" (offline template)" if self.runner is None else "")
+        mode = "offline template" if self.runner is None else f"agent, {tries} lint retries"
+        return True, f"tasks.md written ({mode})" + (", plan-lint ok" if lint is not None else "")
+
+    def _mark_plan_approved(self, item: WorkItem, by: str) -> None:
+        """Claudo refuses a plan whose frontmatter is not `status: approved`: the owner's approval at
+        plan_review is exactly that statement, so write it into the artifact."""
+        text = self.store.read(item, "tasks.md")
+        if "status: proposed" not in text:
+            return
+        text = text.replace("status: proposed", f"status: approved\napproved_by: {by or 'owner'}", 1)
+        self.store.write(item, "tasks.md", text)
 
     def _golden_path(self, item: WorkItem) -> str | None:
         mentioned = self.radar.scan_text(item.idea)

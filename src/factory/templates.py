@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 from factory.workitem import WorkItem
+
+# Same token shape as Claudo's plan model: the IDs a task may cite in `implements`.
+SPEC_ID = re.compile(r"\b(?:INV|BHV|EX|EVAL|NG)-[A-Za-z0-9]+\b")
 
 
 def idea_md(item: WorkItem) -> str:
@@ -86,61 +91,53 @@ covers: [BHV-1]
 
 
 def offline_tasks(item: WorkItem, golden_path: str | None) -> str:
-    scaffold = f"`golden_paths/{golden_path}`" if golden_path else "the IT golden path"
+    """tasks.md in the exact format Claudo's plan parser reads (`### T1 — title`, bracketed lists,
+    backticked files_touched, a `trigger` on the checkpoint). Lint-clean against the real engine."""
+    scaffold = f"golden_paths/{golden_path}" if golden_path else "the IT golden path"
     return f"""---
 type: tasks
 feature: {item.slug}
 version: 0.1.0
 status: proposed
 generated_by: planner (offline)
-approved_by:
 spec: ./spec.md          # version: 0.1.0
 design: ./design.md      # version: 0.1.0
 ---
 
-# Tasks: {item.title}
+# Tasks — {item.title}
 
-## Execution graph
+### T1 — Scaffold the app from the golden path
+- **depends_on :** []
+- **implements :** [BHV-1, INV-1]
+- **files_touched :** `app/`, `tests/`, `pyproject.toml`
+- **verify :** `uv run pytest -q`
+- **done_when :** the app starts from {scaffold} and `GET /health` returns 200 ok.
+- **prompt :**
+  > Scaffold the application from {scaffold}. Keep its structure, CI and Dockerfile.
+  > Use ONLY the stack of design.md section 3. Write the `GET /health` test first (BHV-1).
 
-```mermaid
-flowchart TD
-    T1[T1 scaffold] --> T2[T2 core use case]
-    T2 --> T3[T3 evals]
-    T3 --> CP1{{{{CHECKPOINT CP-1 ship review}}}}
-```
+### T2 — Implement the core use case
+- **depends_on :** [T1]
+- **implements :** [BHV-2]
+- **files_touched :** `app/`, `tests/`
+- **verify :** `uv run pytest -q`
+- **done_when :** the behavior of the intent in spec.md section 1 is covered by passing tests.
+- **prompt :**
+  > Implement the main use case described in spec.md section 1 (BHV-2). Tests first.
+  > No secrets in code; configuration from environment variables.
 
-## Tasks
+### T3 — Evals and gates
+- **depends_on :** [T2]
+- **implements :** [INV-1, INV-2, EVAL-1, EVAL-2, EVAL-3]
+- **files_touched :** `tests/`
+- **verify :** `uv run pytest -q`
+- **done_when :** every eval of spec.md section 7 passes at maturity `{item.maturity}`.
+- **prompt :**
+  > Make every eval of spec.md section 7 executable and green. Only touch app code to fix a defect.
 
-### T1: scaffold the app from the golden path
-- **agent:** implementer
-- **depends_on:** (entry point)
-- **parallel_group:** A
-- **implements:** [BHV-1, INV-1]
-- **anchored_on:** design.md section 2 ({scaffold})
-- **files_touched:** `app/`, `tests/`, `pyproject.toml`
-- **done_when:** `GET /health` test passes
-
-### T2: implement the core use case
-- **agent:** implementer
-- **depends_on:** T1
-- **parallel_group:** B
-- **implements:** [BHV-2]
-- **anchored_on:** design.md section 3 (stack)
-- **files_touched:** `app/`
-- **done_when:** BHV-2 is covered by a passing test
-
-### T3: evals
-- **agent:** eval-runner
-- **depends_on:** T2
-- **parallel_group:** C
-- **implements:** [INV-1, INV-2]
-- **files_touched:** `tests/`
-- **done_when:** all gates for `{item.maturity}` are green
-
-### CP-1: ship review
-- **mode:** blocking
-- **role:** IT
-- **done_when:** IT approves the merge
+### CP-1 — Ship review (the merge is human)
+- **trigger :** auto when [T3] done
+- **mode :** blocking
 """
 
 
@@ -161,16 +158,33 @@ Sections: 1. Intent (+ Target KPI), 2. Glossary, 3. Invariants, 4. Behaviors (Gi
 """
 
 
-def plan_prompt(item: WorkItem, feedback: str) -> str:
+PLAN_FORMAT = """EXACT FORMAT (a parser reads it; any deviation makes the plan unreadable):
+- Frontmatter: type: tasks, feature, version: 0.1.0, status: proposed, spec: ./spec.md  # version: 0.1.0
+- One section per task, header EXACTLY `### T1 — Short title` (T + number, space, EM DASH, space).
+- Fields, one per line, each written `- **name :** value`:
+    **depends_on :** [T1, T2]            bracketed list of task IDs; `[]` when none
+    **implements :** [BHV-1, INV-2]      spec IDs that EXIST in spec.md; some task must carry each EVAL-n
+    **files_touched :** `app/`, `tests/` each path in backticks; parallel tasks must not overlap
+    **verify :** `uv run pytest -q`      ONE command in backticks (uv/pytest/ruff/just/make/python)
+    **done_when :** one checkable sentence
+    **prompt :** then the instructions as lines starting with two spaces and `> `
+- The LAST section is a human checkpoint, written exactly like this:
+    ### CP-1 — Ship review (the merge is human)
+    - **trigger :** auto when [T3] done
+    - **mode :** blocking
+"""
+
+
+def plan_prompt(item: WorkItem, feedback: str, spec_ids: list[str] | None = None) -> str:
     fb = f"\nThe owner rejected the previous plan. Their feedback:\n{feedback}\n" if feedback else ""
+    ids = f"\nSpec IDs you may reference in `implements`: {', '.join(spec_ids)}.\n" if spec_ids else ""
     return f"""You are the planner of a governed AI software factory.
 Read spec.md and design.md in the current directory. Write tasks.md: the execution plan.
-Rules: T1 scaffolds from the golden path in design.md section 2; each task has agent,
-depends_on, parallel_group, implements (spec IDs), anchored_on, files_touched, done_when;
-small tasks; tests before code; end with a blocking checkpoint `CP-1 ship review` (role IT).
-Use ONLY the stack in design.md section 3.{fb}
-Output ONLY the markdown of tasks.md (frontmatter: type: tasks, feature: {item.slug},
-version: 0.1.0, status: proposed), no commentary, no code fence.
+Rules: T1 scaffolds from the golden path named in design.md section 2; small tasks; tests
+before code; use ONLY the stack in design.md section 3; every BHV and INV of the spec is
+implemented by some task.{ids}{fb}
+{PLAN_FORMAT}
+Output ONLY the markdown of tasks.md (feature: {item.slug}), no commentary, no code fence.
 """
 
 

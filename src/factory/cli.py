@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from factory.agents import AgentError, get_runner
+from factory.claudo import ClaudoEngine, EngineError, discover
 from factory.config import ConfigError, find_root, load_config
 from factory.foreman import FactoryError, Foreman, describe_step
 from factory.guard import check_project
@@ -19,7 +20,11 @@ def _foreman(args: argparse.Namespace, runner_name: str | None = None) -> Forema
     root = Path(args.root).resolve() if args.root else find_root()
     cfg = load_config(root)
     radar = load_radar(cfg.radar_path)
-    return Foreman(cfg, radar, Store(cfg.work_dir), runner=get_runner(runner_name or cfg.runner))
+    home = discover(cfg.claudo_home, root)  # None = no Claudo around: plans are simply not linted
+    engine = ClaudoEngine(home) if home else None
+    return Foreman(
+        cfg, radar, Store(cfg.work_dir), runner=get_runner(runner_name or cfg.runner), engine=engine
+    )
 
 
 def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
@@ -293,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, RadarError, FactoryError, AgentError, KeyError) as e:
+    except (ConfigError, RadarError, FactoryError, AgentError, EngineError, KeyError) as e:
         msg = e.args[0] if isinstance(e, KeyError) and e.args else e
         print(f"error: {msg}", file=sys.stderr)
         return 2

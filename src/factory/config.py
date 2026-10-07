@@ -32,6 +32,8 @@ class Config:
     runner: str = "offline"
     max_turns_build: int = 40
     max_build_attempts: int = 3
+    claudo_home: str | None = None  # [engine] claudo; None = auto-discover (CLAUDO_HOME, sibling checkout)
+    plan_lint_retries: int = 2  # [engine] plan_lint_retries: re-prompts with Claudo's lint errors
     judge_enabled: bool = False
     judge_thinking_tokens: int | None = None  # None = model default (expensive); 0 disables thinking
     models: dict[str, str] = field(default_factory=dict)
@@ -78,6 +80,8 @@ def load_config(root: Path) -> Config:
         max_build_attempts=max(1, int(agent.get("max_build_attempts", 3))),
         judge_enabled=bool(agent.get("judge", False)),
         judge_thinking_tokens=agent.get("judge_thinking_tokens"),
+        claudo_home=data.get("engine", {}).get("claudo") or None,
+        plan_lint_retries=max(0, int(data.get("engine", {}).get("plan_lint_retries", 2))),
         models=dict(agent.get("models", {})),
         gate_commands=dict(gates.get("commands", {})),
     )

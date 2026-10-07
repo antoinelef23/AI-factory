@@ -23,6 +23,12 @@ plan = "sonnet"
 build = "sonnet"
 judge = "haiku"                   # a different, cheaper model than the generators (no self-grading)
 
+[engine]
+# Claudo checkout used to validate (and later execute) plans. Empty = auto-discover: $CLAUDO_HOME, then a
+# sibling ../AI-Workflow-gates/_build or ../Claudo. With no engine found the factory still runs, unlinted.
+claudo = ""
+plan_lint_retries = 2             # re-prompt the planner this many times with Claudo's plan-lint errors
+
 # Gates per maturity rung. The higher the rung, the stricter the factory.
 [gates]
 pov = ["radar", "secrets"]
