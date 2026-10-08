@@ -11,6 +11,7 @@ from pathlib import Path
 from factory.agents import AgentError, get_runner
 from factory.claudo import ClaudoEngine, EngineError, discover
 from factory.config import ConfigError, find_root, load_config
+from factory.delivery import GhCli
 from factory.drift import radar_diff, render_diff, scan_drift
 from factory.foreman import FactoryError, Foreman, describe_step
 from factory.guard import check_project
@@ -25,13 +26,23 @@ def _foreman(args: argparse.Namespace, runner_name: str | None = None) -> Forema
     radar = load_radar(cfg.radar_path)
     home = discover(cfg.claudo_home, root)  # None = no Claudo around: plans are simply not linted
     engine = ClaudoEngine(home) if home else None
+    host = GhCli() if cfg.delivery_provider == "github" else None
     return Foreman(
-        cfg, radar, Store(cfg.work_dir), runner=get_runner(runner_name or cfg.runner), engine=engine
+        cfg,
+        radar,
+        Store(cfg.work_dir),
+        runner=get_runner(runner_name or cfg.runner),
+        engine=engine,
+        host=host,
     )
 
 
 def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
     print(f"{item.slug}  [{item.maturity}]  {item.title}")
+    if item.repo_url:
+        print(f"  repo  : {item.repo} (private)")
+    if item.pr_url:
+        print(f"  pr    : {item.pr_url} ({item.pr_state or 'OPEN'})")
     if item.kind != "app":
         state = "merged" if item.merged else ("abandoned" if item.status == "abandoned" else "not merged yet")
         print(f"  change: {item.kind} of {item.target}, branch factory/{item.slug} ({state})")
@@ -69,6 +80,10 @@ def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
     elif item.status == "blocked":
         print(f"  next  : fix or explain, then `factory run {item.slug}`")
         print(f"  report: work/{item.slug}/gate-report.md")
+    elif item.status == "shipped" and item.pr_url and not item.merged:
+        print(f"  next  : merge the pull request on the host, then `factory sync {item.slug}`")
+    elif item.status == "shipped" and not item.repo_url and f.host is not None and not item.merged:
+        print(f"  next  : factory publish {item.slug} --as it   (private repository / pull request)")
     elif item.status == "shipped" and item.kind != "app" and not item.merged:
         print(f"  next  : factory merge {item.slug} --as it   (IT merges: the factory never does)")
     elif item.status == "shipped":
@@ -101,6 +116,31 @@ def cmd_merge(args: argparse.Namespace) -> int:
     item = f.merge(f.store.load(args.slug), args.role, args.by)
     print(f"Merged {item.slug} into {item.base_branch} of {item.target} (fast-forward).")
     print("The app folder now shows the delivered state again; `factory drift` will judge it.")
+    return 0
+
+
+def cmd_publish(args: argparse.Namespace) -> int:
+    f = _foreman(args, "offline")
+    item = f.publish(f.store.load(args.slug), args.role, args.by)
+    if item.kind == "app":
+        print(f"Published {item.slug}: private repository {item.repo}")
+        print(f"  {item.repo_url}")
+    else:
+        print(f"Pull request for {item.slug}: {item.pr_url}")
+        print(f"The factory never merges: merge it on the host, then `factory sync {item.slug}`.")
+    return 0
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    f = _foreman(args, "offline")
+    item = f.sync(f.store.load(args.slug))
+    if item.merged:
+        print(
+            f"{item.slug}: the pull request is merged; {item.target} is now at the merged {item.base_branch}."
+        )
+        print("`factory drift` will judge it.")
+    else:
+        print(f"{item.slug}: pull request {item.pr_state} ({item.pr_url})")
     return 0
 
 
@@ -338,6 +378,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("slug")
     role_opt(sp, ("it",))
     sp.set_defaults(func=cmd_merge)
+
+    sp = sub.add_parser("publish", help="IT: push a shipped app to its private repo / open a pull request")
+    sp.add_argument("slug")
+    role_opt(sp, ("it",))
+    sp.set_defaults(func=cmd_publish)
+
+    sp = sub.add_parser("sync", help="after the pull request was merged on the host, update the local app")
+    sp.add_argument("slug")
+    sp.set_defaults(func=cmd_sync)
 
     sp = sub.add_parser("abandon", help="IT/owner: drop a change nobody wants, freeing the app")
     sp.add_argument("slug")

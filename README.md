@@ -111,6 +111,22 @@ showing the change branch until IT merges, so `drift` marks that app *in flight*
 failing while a *migration* is pending, since the violation is still there. One open change per app.
 `factory drift --open` now opens migrations that you can simply `run`.
 
+## Deliver to GitHub: one private repo per app, one pull request per change
+
+Off by default. Set `[delivery] provider = "github"` in `factory.toml` (needs the `gh` CLI, already logged in):
+
+```powershell
+uv run factory publish orders --as it                    # shipped app -> a new PRIVATE repo app-orders, HEAD pushed
+uv run factory publish add-csv-export --as it            # approved change -> branch pushed + a pull request
+uv run factory sync add-csv-export                       # after IT merged the PR on GitHub: update the local app
+```
+
+Safety is built in rather than configured: the only way the factory creates a repository is `--private` (there is
+no visibility setting), it **never merges** (the pull request is IT's to merge on GitHub), it refuses to push into
+a repository that already exists under that name, and nothing leaves the machine unless IT runs `publish`. The pull
+request carries the intent, gate results, the Claudo reviewer's verdict, the approvals and the cost. Once a pull
+request exists, the local `factory merge` is refused so there is a single way to merge.
+
 ## Bring your own radar
 
 ```powershell

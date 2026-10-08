@@ -223,3 +223,42 @@ def abandon_change(app: Path, slug: str) -> None:
     if current_branch(app) == branch:
         _git(app, "switch", "-q", base)
     _git(app, "branch", "-q", "-D", branch)
+
+
+def remote_url(app: Path, name: str = "origin") -> str:
+    p = subprocess.run(
+        ["git", "remote", "get-url", name], cwd=app, capture_output=True, text=True, encoding="utf-8"
+    )
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def add_remote(app: Path, url: str, name: str = "origin") -> None:
+    """Point `name` at `url`. An existing remote with a DIFFERENT url is refused, never overwritten."""
+    existing = remote_url(app, name)
+    if existing and existing != url:
+        raise ProjectError(f"remote '{name}' of {app} already points to {existing}: refusing to repoint it")
+    if not existing:
+        _git(app, "remote", "add", name, url)
+
+
+def push_branch(app: Path, branch: str, remote: str = "origin") -> None:
+    _git(app, "push", "-q", "-u", remote, branch)
+
+
+def sync_merged_base(app: Path, slug: str, base: str) -> str:
+    """After IT merged the pull request on the host: fast-forward the local base to it and drop the change
+    branch. Fast-forward only, like the local merge. Returns the new base tip."""
+    if porcelain(app):
+        raise ProjectError(f"{app} has uncommitted changes: commit or discard them before syncing")
+    _git(app, "fetch", "-q", "origin")
+    _git(app, "switch", "-q", base)
+    try:
+        _git(app, "merge", "--ff-only", f"origin/{base}")
+    except ProjectError as e:
+        raise ProjectError(
+            f"local {base} has diverged from origin/{base}: resolve it by hand, then sync again"
+        ) from e
+    branch = f"factory/{slug}"
+    if branch_exists(app, branch):
+        _git(app, "branch", "-q", "-D", branch)  # its work is in the merged base now
+    return _git(app, "rev-parse", "HEAD")

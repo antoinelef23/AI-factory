@@ -34,6 +34,14 @@ exception_days = 180
 # sees it; an agent-written one is re-prompted with the errors this many times, then blocked.
 spec_lint_retries = 2
 
+[delivery]
+# Where shipped apps go. OFF by default: nothing leaves this machine unless IT runs `factory publish`.
+# "github": one PRIVATE repository per app (named repo_prefix + slug) and one pull request per change, through the
+# `gh` CLI. There is no visibility setting: the factory cannot create a public repository. It never merges either.
+provider = "none"
+owner = ""                        # account or org for the repositories; empty = the authenticated gh user
+repo_prefix = "app-"
+
 [engine]
 # Claudo checkout used to validate (and later execute) plans. Empty = auto-discover: $CLAUDO_HOME, then a
 # sibling ../AI-Workflow-gates/_build or ../Claudo. With no engine found the factory still runs, unlinted.

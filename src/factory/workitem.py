@@ -61,7 +61,13 @@ class WorkItem:
     target: str = ""  # for a change: the slug of the shipped app it works on
     base_branch: str = ""  # a change runs on factory/<slug>; the branch it started from
     base_sha: str = ""
-    merged: bool = False  # IT merged the change branch (`factory merge`)
+    merged: bool = (
+        False  # IT merged the change branch (`factory merge`, or the pull request + `factory sync`)
+    )
+    repo: str = ""  # owner/name of the app's private repository once published
+    repo_url: str = ""  # the remote the app pushes to
+    pr_url: str = ""  # the pull request opened for a change
+    pr_state: str = ""  # OPEN | MERGED | CLOSED, as last seen by `factory sync`
     created: str = field(default_factory=now)
     stage: str = "triage"
     status: str = "active"  # active | waiting | blocked | shipped

@@ -34,6 +34,11 @@ class Config:
     max_build_attempts: int = 3
     claudo_home: str | None = None  # [engine] claudo; None = auto-discover (CLAUDO_HOME, sibling checkout)
     plan_lint_retries: int = 2  # [engine] plan_lint_retries: re-prompts with Claudo's lint errors
+    delivery_provider: str = "none"  # [delivery] provider: none | github
+    delivery_owner: str = (
+        ""  # [delivery] owner: account/org for the repositories ("" = the authenticated user)
+    )
+    repo_prefix: str = "app-"  # [delivery] repo_prefix: repository name = prefix + app slug
     claudo_build_from: str = "mvp"  # [engine] build_from: lowest maturity built through Claudo's orchestrator
     spec_lint_retries: int = 2  # [policy] spec_lint_retries: re-prompts with the structural lint's errors
     exception_days: int = (
@@ -89,6 +94,9 @@ def load_config(root: Path) -> Config:
         judge_thinking_tokens=agent.get("judge_thinking_tokens"),
         claudo_home=data.get("engine", {}).get("claudo") or None,
         plan_lint_retries=max(0, int(data.get("engine", {}).get("plan_lint_retries", 2))),
+        delivery_provider=data.get("delivery", {}).get("provider", "none"),
+        delivery_owner=data.get("delivery", {}).get("owner", ""),
+        repo_prefix=data.get("delivery", {}).get("repo_prefix", "app-"),
         claudo_build_from=data.get("engine", {}).get("build_from", "mvp"),
         exception_days=max(0, int(data.get("policy", {}).get("exception_days", 180))),
         spec_lint_retries=max(0, int(data.get("policy", {}).get("spec_lint_retries", 2))),
@@ -100,6 +108,10 @@ def load_config(root: Path) -> Config:
     for maturity in DEFAULT_GATES:
         if maturity in gates:
             cfg.gates[maturity] = list(gates[maturity])
+    if cfg.delivery_provider not in ("none", "github"):
+        raise ConfigError(
+            f"{path}: [delivery] provider = {cfg.delivery_provider!r}, expected 'none' or 'github'"
+        )
     if cfg.claudo_build_from not in DEFAULT_GATES:
         raise ConfigError(
             f"{path}: [engine] build_from = {cfg.claudo_build_from!r}, "

@@ -16,6 +16,7 @@ from pathlib import Path
 from factory.agents import BUILD_TOOLS, READ_ONLY_TOOLS, ClaudeRunner, strip_fences
 from factory.claudo import ClaudoEngine, EngineError, LintResult, load_or_create_secret
 from factory.config import Config
+from factory.delivery import DeliveryError, GitHost
 from factory.design import (
     CHANGE_KINDS,
     choose_stack,
@@ -34,12 +35,16 @@ from factory.project import (
     CHANGE_TRIPLET_COMMIT,
     ProjectError,
     abandon_change,
+    add_remote,
     begin_change,
     commit_all,
     commit_leftovers,
+    current_branch,
     merge_fast_forward,
     porcelain,
     prepare_project,
+    push_branch,
+    sync_merged_base,
 )
 from factory.radar import BLOCK, MATURITIES, Radar, verdict
 from factory.speclint import lint_spec
@@ -75,6 +80,7 @@ class Foreman:
         runner: ClaudeRunner | None = None,
         executor: Executor = shell_executor,
         engine: ClaudoEngine | None = None,
+        host: GitHost | None = None,
     ) -> None:
         self.cfg = cfg
         self.radar = radar
@@ -83,6 +89,7 @@ class Foreman:
         self.executor = executor
         self.today: Callable[[], date] = date.today  # injectable clock (tests)
         self.engine = engine  # Claudo: validates every plan with its own plan-lint when present
+        self.host = host  # git host for `publish` / `sync` (None = delivery is off)
 
     # ------------------------------------------------------------------ intake
     def intake(self, title: str, idea: str, maturity: str = "poc", requester: str = "business") -> WorkItem:
@@ -700,6 +707,10 @@ class Foreman:
             raise FactoryError("only a change to an existing app is merged; a new app is delivered as built")
         if item.merged:
             raise FactoryError(f"'{item.slug}' is already merged")
+        if item.pr_url:
+            raise FactoryError(
+                f"'{item.slug}' has a pull request ({item.pr_url}): merge it there, then run `factory sync`"
+            )
         if item.stage != "shipped":
             raise FactoryError(f"'{item.slug}' is not approved yet (it is at stage '{item.stage}')")
         try:
@@ -708,6 +719,134 @@ class Foreman:
             raise FactoryError(str(e)) from e
         item.merged = True
         item.log("merged", f"IT {by}: {item.base_branch} is now at {tip[:8]}".replace("  ", " "))
+        self.store.save(item)
+        return item
+
+    # ------------------------------------------------------------ delivery (private repos, pull requests)
+    def _host(self) -> GitHost:
+        if self.host is None:
+            raise FactoryError('delivery is off: set [delivery] provider = "github" in factory.toml first')
+        return self.host
+
+    def publish(self, item: WorkItem, role: str, by: str = "") -> WorkItem:
+        """IT publishes: a shipped NEW app becomes a private repository, an approved CHANGE a pull request.
+
+        Explicit by design: nothing leaves the machine unless IT runs this. The factory opens the pull
+        request; merging it is IT's act on the host."""
+        if role != "it":
+            raise FactoryError("only IT publishes: it is the step that leaves this machine")
+        host = self._host()
+        if item.stage != "shipped":
+            raise FactoryError(f"'{item.slug}' is not approved yet (it is at stage '{item.stage}')")
+        try:
+            if item.kind == "app":
+                self._publish_app(item, host, by)
+            else:
+                self._publish_change(item, host, by)
+        except (DeliveryError, ProjectError) as e:
+            raise FactoryError(str(e)) from e
+        self.store.save(item)
+        return item
+
+    def _publish_app(self, item: WorkItem, host: GitHost, by: str) -> None:
+        app = self.app_dir(item)
+        prepare_project(app)  # a git repo with a local identity (a POC from the single agent has none yet)
+        branch = current_branch(app)
+        if branch.startswith("factory/"):
+            # A change is in flight: publish the app as it was BEFORE it (the change goes as a pull request).
+            open_change = next((i for i in self.store.all() if i.change_open and i.target == item.slug), None)
+            branch = open_change.base_branch if open_change and open_change.base_branch else "main"
+        else:
+            commit_leftovers(app, item.slug)  # what is published is exactly HEAD
+        if not item.repo_url:
+            owner = self.cfg.delivery_owner or host.owner()
+            name = f"{self.cfg.repo_prefix}{item.slug}"
+            if host.repo_exists(owner, name):
+                raise FactoryError(
+                    f"{owner}/{name} already exists and was not created by this factory: refusing to push "
+                    "into it. Choose another [delivery] repo_prefix, or push the app yourself"
+                )
+            description = f"{item.title} (built by the AI software factory; maturity {item.maturity})"
+            item.repo_url = host.create_private_repo(owner, name, description)
+            item.repo = f"{owner}/{name}"
+        add_remote(app, item.repo_url)
+        push_branch(app, branch)
+        item.log("published", f"IT {by}: private repository {item.repo}".replace("  ", " "))
+
+    def _pr_body(self, item: WorkItem) -> str:
+        spec = self.store.read(item, "spec.md")
+        intent = spec.split("## 1.", 1)[1].split("## 2.", 1)[0].strip() if "## 1." in spec else item.idea
+        gates = [
+            ln.removeprefix("## ")
+            for ln in self.store.read(item, "gate-report.md").splitlines()
+            if ln.startswith("## ")
+        ]
+        approvals = [
+            f"- {a['stage']}: {a['role']} {a['by']}" + (f" ({a['note']})" if a.get("note") else "")
+            for a in item.approvals
+        ]
+        review = item.claudo_review
+        lines = [
+            f"**{item.kind.capitalize()}** to `{item.target}` (maturity `{item.maturity}`), "
+            "built by the AI software factory.",
+            "",
+            "## Intent",
+            intent[:1500],
+            "",
+            "## Gates",
+            *([f"- {g}" for g in gates] or ["- (no gate report)"]),
+        ]
+        if review:
+            lines += ["", f"## Claudo reviewer\n{review['cp']}: **{review['verdict']}** ({review['report']})"]
+        if approvals:
+            lines += ["", "## Approvals", *approvals]
+        lines += [
+            "",
+            f"Cost: ${item.cost_usd:.2f}. Spec, design and plan: `work/{item.slug}/`.",
+            "",
+            "**The factory never merges.** Review and merge this pull request yourself, then `factory sync`.",
+        ]
+        return "\n".join(lines)
+
+    def _publish_change(self, item: WorkItem, host: GitHost, by: str) -> None:
+        if item.merged:
+            raise FactoryError(f"'{item.slug}' is already merged")
+        target = self._shipped_target(item.target)
+        if not target.repo_url:
+            raise FactoryError(f"publish the app first: `factory publish {item.target} --as it`")
+        app = self.app_dir(item)
+        push_branch(app, f"factory/{item.slug}")
+        if item.pr_url:
+            item.log("published", f"IT {by}: branch updated, pull request {item.pr_url}".replace("  ", " "))
+            return
+        owner, name = target.repo.split("/", 1)
+        item.pr_url = host.open_pull_request(
+            owner,
+            name,
+            f"factory/{item.slug}",
+            item.base_branch or "main",
+            f"[factory] {item.title}",
+            self._pr_body(item),
+        )
+        item.pr_state = "OPEN"
+        item.log("published", f"IT {by}: pull request {item.pr_url}".replace("  ", " "))
+
+    def sync(self, item: WorkItem) -> WorkItem:
+        """Read the pull request's state; once IT merged it on the host, fast-forward the local app to it."""
+        host = self._host()
+        if item.kind == "app" or not item.pr_url:
+            raise FactoryError(f"'{item.slug}' has no pull request: publish the change first")
+        try:
+            state = host.pull_request_state(item.pr_url)
+            item.pr_state = state
+            if state == "MERGED" and not item.merged:
+                tip = sync_merged_base(self.app_dir(item), item.slug, item.base_branch or "main")
+                item.merged = True
+                item.log("merged", f"on the host; {item.base_branch} is now at {tip[:8]}")
+            elif state == "CLOSED":
+                item.log("closed", "the pull request was closed without merging")
+        except (DeliveryError, ProjectError) as e:
+            raise FactoryError(str(e)) from e
         self.store.save(item)
         return item
 
