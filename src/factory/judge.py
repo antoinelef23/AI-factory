@@ -38,9 +38,9 @@ RUBRICS: dict[str, list[Criterion]] = {
         ("eval_coverage", "every BHV and INV is covered by at least one executable eval in the evals table"),
         (
             "examples",
-            "concrete, realistic input to output examples covering every behavior; edge cases only where "
-            "the idea or the spec's own behaviors define them (an edge case the idea never asked for is a "
-            "fidelity problem, never a plus)",
+            "a dedicated examples section with concrete input to output pairs, at least one per behavior "
+            "(no examples section: score 1 or 2); edge cases only where the idea or the spec's behaviors "
+            "define them: an edge case the idea never asked for is a fidelity problem, never a plus",
         ),
         ("scope", "explicit non-goals; the spec does not choose technologies (that is the design's job)"),
     ],

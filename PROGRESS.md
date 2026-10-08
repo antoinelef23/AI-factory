@@ -30,6 +30,17 @@ reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens 
   factory still never blocks a host merge (branch protection is the place for that). 9 tests, `gh` adapter
   included (`gh pr checks` exits 1/8 for failing/pending: the JSON is read anyway). Not run against real GitHub.
 
+- **Judge rubric vs S-1 (found by the V-1 live run):** the `examples` criterion demanded "at least one edge
+  case" while S-1 forbids invented ones, so the judge failed the first V-1 spec (examples 2/5). New wording: a
+  dedicated examples section, one per behaviour, edge cases only where the idea or spec define them. Billed
+  recalibration with sonnet (Antoine's go, about $0.55 in all): first wording 3/4 caught, 0 missed, but it no longer
+  separated "examples" from "none" in a targeted re-check; final wording: both targeted re-checks fail the
+  no-examples spec (examples 1/5) and keep the good one at "revise"; one full run then gave 2/4 caught, `no_evals`
+  missed (its verdict still fell to fail), `no_examples` inconclusive (the judge cannot quote a missing section,
+  so the score is ungrounded), the about-endpoint answer unreliable. **The judge is noisy run to run**: one
+  calibration run is not a measure. Next: several runs or a majority vote per artifact before trusting a single
+  verdict; it stays advisory.
+
 ### The 2026-10-08 review and its corrections
 Opus reviewed everything Sonnet built (CORRECTIONS.md has the findings with their evidence, and the plan). Sonnet
 then applied the plan. Status per item:

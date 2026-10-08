@@ -180,4 +180,4 @@ def test_the_examples_criterion_never_demands_an_edge_case_the_idea_did_not_ask_
     every faithful MVP spec of a simple idea (found by the 2026-10-08 live run). The two must agree."""
     examples = dict(RUBRICS["spec"])["examples"]
     assert "at least one edge case" not in examples
-    assert "every behavior" in examples and "never a plus" in examples
+    assert "at least one per behavior" in examples and "never a plus" in examples
