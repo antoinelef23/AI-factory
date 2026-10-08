@@ -146,7 +146,8 @@ def test_publishing_a_change_pushes_its_branch_and_opens_a_pull_request(hosted, 
         pr["repo"] == f"acme/app-{app.slug}" and pr["head"] == f"factory/{ch.slug}" and pr["base"] == "main"
     )
     assert pr["title"] == "[factory] Drop pydantic"
-    assert "Approvals" in pr["body"] and "never merges" in pr["body"] and "Intent" in pr["body"]
+    assert "Approvals" in pr["body"] and "never merges" in pr["body"]
+    assert pr["body"].count("Intent") == 1  # the spec's own section heading is not repeated under ours
     assert ch.pr_url.endswith("/pull/1") and ch.pr_state == "OPEN"
     remote = hosted.host.base / f"app-{app.slug}.git"
     assert git(remote, "rev-parse", f"factory/{ch.slug}")  # the branch is there

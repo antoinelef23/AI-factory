@@ -775,7 +775,10 @@ class Foreman:
 
     def _pr_body(self, item: WorkItem) -> str:
         spec = self.store.read(item, "spec.md")
-        intent = spec.split("## 1.", 1)[1].split("## 2.", 1)[0].strip() if "## 1." in spec else item.idea
+        intent = item.idea
+        if "## 1." in spec:  # the section's own heading line is dropped: the PR has its own "Intent" title
+            section = spec.split("## 1.", 1)[1].split("## 2.", 1)[0]
+            intent = section.partition("\n")[2].strip() or item.idea
         gates = [
             ln.removeprefix("## ")
             for ln in self.store.read(item, "gate-report.md").splitlines()
