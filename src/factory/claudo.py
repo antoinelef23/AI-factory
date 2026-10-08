@@ -265,6 +265,14 @@ class ClaudoEngine:
         path.write_text(f"reason={clean}\nby={by}\n", encoding="utf-8", newline="\n")
         return path
 
+    def supports_nonce(self) -> bool:
+        """True when this Claudo binds approval tokens to a per-round nonce (approvals.ENV_NONCE, Claudo
+        b9b96c7 and later). An older one silently ignores the nonce: replay protection is then not there."""
+        try:
+            return "ENV_NONCE" in (self.home / "lab" / "engine" / "approvals.py").read_text(encoding="utf-8")
+        except OSError:
+            return False
+
     @staticmethod
     def reopen_checkpoint(project: Path, slug: str, cp: str) -> bool:
         """Make a checkpoint Claudo already consumed pending again, by removing it from the run state, so the

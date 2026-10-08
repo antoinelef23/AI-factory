@@ -298,13 +298,15 @@ class Foreman:
         if head_sha(app) != item.gated_sha:
             raise FactoryError(
                 f"the app changed after the gates ran (gated {item.gated_sha[:8]}, now "
-                f"{head_sha(app)[:8]}): run `factory run {item.slug}` again before approving"
+                f"{head_sha(app)[:8]}): reject it so it is rebuilt and gated again: "
+                f'`factory reject {item.slug} --as it --reason "..."`'
             )
         dirty = porcelain(app)
         if dirty:
             raise FactoryError(
-                f"uncommitted changes since the gates ran: {', '.join(dirty[:6])}; "
-                f"run `factory run {item.slug}` again before approving"
+                f"uncommitted changes since the gates ran: {', '.join(dirty[:6])}; discard them, or reject "
+                "the item so it is rebuilt and gated again: "
+                f'`factory reject {item.slug} --as it --reason "..."`'
             )
 
     def _seal_approved_head(self, item: WorkItem) -> None:
@@ -844,7 +846,9 @@ class Foreman:
         elif tip != item.approved_head:
             raise FactoryError(
                 f"{branch} is at {tip[:8]} but IT approved {item.approved_head[:8]}: the code moved "
-                "after the approval. Run the item again so the new state is gated and approved"
+                f"after the approval. See `git log {item.approved_head[:8]}..{branch}`; new work goes "
+                f'through `factory change {item.target or item.slug} "title" --idea "..."` so it is '
+                "gated and approved"
             )
         try:
             hits = secrets_in_history(app, rev_range)
@@ -1135,6 +1139,14 @@ class Foreman:
             item.claudo_rejection = {}
         # A new round of the checkpoint: a fresh nonce, so no token from an earlier round verifies again.
         item.approval_nonce = secrets.token_hex(16)
+        if not self.engine.supports_nonce():
+            warning = (
+                "replay protection unavailable: this Claudo predates nonce-bound approval tokens "
+                "(update it to b9b96c7 or later)"
+            )
+            if warning not in item.notes:
+                item.notes.append(warning)
+                item.log("warning", warning)
         self.store.save(item)
         res = self.engine.run_build(
             item.slug, app, env=self._claudo_env(item), timeout=self.cfg.claudo_timeout

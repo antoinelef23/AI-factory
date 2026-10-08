@@ -28,6 +28,7 @@ class ScriptedClaudo:
         )
         self.runs, self.signed, self.rejected, self.sign_error = [], [], [], sign_error
         self.reopened = []
+        self.nonce_support = True
         self.journal_total = 0.0
         self.review = ("PASS", "work/x/.runs/CP-1-review.md")
         self.trajectory_result = (True, "[trajectory] OK")
@@ -54,6 +55,9 @@ class ScriptedClaudo:
         if self.sign_error:
             raise EngineError(self.sign_error)
         self.signed.append({"cp": cp, "author": author, "secret": secret, "project": project, "nonce": nonce})
+
+    def supports_nonce(self):
+        return self.nonce_support
 
     def reopen_checkpoint(self, project, slug, cp):
         self.reopened.append(cp)

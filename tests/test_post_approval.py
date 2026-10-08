@@ -218,3 +218,49 @@ def test_a_ship_blocked_after_the_final_run_is_reworked_by_a_rejection(foreman):
     item = foreman.run(foreman.reject(item, "it", "revert the edit made after the approval", by="bob"))
     assert engine.reopened == ["CP-1"] and engine.rejected[-1][1] == "revert the edit made after the approval"
     assert (item.stage, item.status) == ("ship_review", "waiting")
+
+
+# ------------------------------------------------------------- J-8: an older Claudo is reported, not trusted
+
+
+def test_an_older_claudo_without_nonces_is_reported_on_the_item(foreman):
+
+    engine = Claudo("PASS")
+    engine.nonce_support = False
+    item = at_ship_review(foreman, engine)
+    assert any("replay protection unavailable" in n for n in item.notes)
+    assert [h["event"] for h in item.history].count("warning") == 1
+
+
+def test_supports_nonce_reads_the_engines_own_approvals_module(tmp_path):
+    engine = ClaudoEngine.__new__(ClaudoEngine)
+    engine.home = tmp_path
+    assert engine.supports_nonce() is False  # no approvals.py at all
+    approvals = tmp_path / "lab" / "engine" / "approvals.py"
+    approvals.parent.mkdir(parents=True)
+    approvals.write_text('ENV_SECRET = "LAB_APPROVAL_SECRET"\n', encoding="utf-8")
+    assert engine.supports_nonce() is False  # before b9b96c7
+    approvals.write_text('ENV_SECRET = "x"\nENV_NONCE = "LAB_APPROVAL_NONCE"\n', encoding="utf-8")
+    assert engine.supports_nonce() is True
+
+
+# ------------------------------------------------------------- J-3: refusals name a command that helps
+
+
+def test_the_refusal_after_a_post_approval_block_names_reject_and_reject_regates(foreman):
+    from factory.foreman import FactoryError
+    from factory.project import head_sha
+
+    def sneaky(project):
+        (project / "app" / "main.py").write_text("# edited after the approval\n", encoding="utf-8")
+
+    engine = Claudo(after_approval=sneaky)
+    engine.outcomes.append(BuildResult("checkpoint", "CP-1", "reworked"))
+    item = at_ship_review(foreman, engine)
+    item = foreman.approve(item, "it", by="bob")
+    with pytest.raises(FactoryError) as err:
+        foreman.approve(item, "it", by="bob", note="again")
+    assert "factory reject x --as it" in str(err.value) and "factory run" not in str(err.value)
+    item = foreman.run(foreman.reject(item, "it", "revert it", by="bob"))  # follow the advice
+    assert (item.stage, item.status) == ("ship_review", "waiting")
+    assert item.gated_sha == head_sha(foreman.app_dir(item))  # gated again, on the new head
