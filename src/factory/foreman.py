@@ -35,7 +35,7 @@ from factory.design import (
 )
 from factory.detect import pyproject_dependencies
 from factory.drift import Drift, migration_idea
-from factory.gates import Executor, GateResult, format_report, run_gates, shell_executor
+from factory.gates import Executor, GateResult, format_report, run_gates, secrets_in_history, shell_executor
 from factory.guard import check_project, plan_radar_errors
 from factory.judge import judge
 from factory.project import (
@@ -55,6 +55,8 @@ from factory.project import (
     post_approval_changes,
     prepare_project,
     push_branch,
+    ref_exists,
+    rev_parse,
     sync_merged_base,
 )
 from factory.radar import BLOCK, MATURITIES, Radar, verdict
@@ -262,6 +264,8 @@ class Foreman:
                     "; ".join(reasons) + ': to ship anyway, approve with --note "why this is acceptable"; '
                     "or reject with --reason to have it reworked"
                 )
+        if item.stage == "ship_review":
+            self._check_gated_head(item)
         if item.stage == "ship_review" and item.claudo_cp:
             outcome, detail = self._finalize_with_claudo(item, by or role)
             if outcome == "blocked":  # signing, the final run, or what it changed failed: nothing ships
@@ -275,12 +279,40 @@ class Foreman:
                 self.store.save(item)
                 return item
         elif item.stage == "ship_review":
-            item.approved_head = head_sha(self.app_dir(item))
+            self._seal_approved_head(item)
         item.approvals.append({"stage": item.stage, "role": role, "by": by or role, "note": note})
         item.log("approved", f"{role} {by}".strip() + (f": {note}" if note else ""))
         item.feedback = ""
         self._advance(item)
         return self.run(item)
+
+    def _check_gated_head(self, item: WorkItem) -> None:
+        """IT approves exactly what the gates judged: refuse if the app moved or got dirty since."""
+        app = self.app_dir(item)
+        if not item.gated_sha or not app.is_dir():
+            return
+        if head_sha(app) != item.gated_sha:
+            raise FactoryError(
+                f"the app changed after the gates ran (gated {item.gated_sha[:8]}, now "
+                f"{head_sha(app)[:8]}): run `factory run {item.slug}` again before approving"
+            )
+        dirty = porcelain(app)
+        if dirty:
+            raise FactoryError(
+                f"uncommitted changes since the gates ran: {', '.join(dirty[:6])}; "
+                f"run `factory run {item.slug}` again before approving"
+            )
+
+    def _seal_approved_head(self, item: WorkItem) -> None:
+        """Record the commit IT approves. An app the single agent built outside git is committed here, as the
+        very tree the gates judged, so that what is approved, and later published, is a commit."""
+        app = self.app_dir(item)
+        if not app.is_dir():
+            return
+        if not item.gated_sha:  # never in git when the gates ran: the tree IS what was gated
+            prepare_project(app)
+            commit_leftovers(app, item.slug)
+        item.approved_head = head_sha(app)
 
     def reject(self, item: WorkItem, role: str, reason: str, by: str = "") -> WorkItem:
         self._require_checkpoint(item, role)
@@ -739,6 +771,7 @@ class Foreman:
         except ProjectError as e:
             raise FactoryError(str(e)) from e
         item.merged = True
+        self._move_target_head(item, tip)
         item.log("merged", f"IT {by}: {item.base_branch} is now at {tip[:8]}".replace("  ", " "))
         self.store.save(item)
         return item
@@ -749,7 +782,7 @@ class Foreman:
             raise FactoryError('delivery is off: set [delivery] provider = "github" in factory.toml first')
         return self.host
 
-    def publish(self, item: WorkItem, role: str, by: str = "") -> WorkItem:
+    def publish(self, item: WorkItem, role: str, by: str = "", accept_unverified: bool = False) -> WorkItem:
         """IT publishes: a shipped NEW app becomes a private repository, an approved CHANGE a pull request.
 
         Explicit by design: nothing leaves the machine unless IT runs this. The factory opens the pull
@@ -761,15 +794,51 @@ class Foreman:
             raise FactoryError(f"'{item.slug}' is not approved yet (it is at stage '{item.stage}')")
         try:
             if item.kind == "app":
-                self._publish_app(item, host, by)
+                self._publish_app(item, host, by, accept_unverified)
             else:
-                self._publish_change(item, host, by)
+                self._publish_change(item, host, by, accept_unverified)
         except (DeliveryError, ProjectError) as e:
             raise FactoryError(str(e)) from e
         self.store.save(item)
         return item
 
-    def _publish_app(self, item: WorkItem, host: GitHost, by: str) -> None:
+    def _verify_publishable(
+        self, item: WorkItem, app: Path, branch: str, rev_range: str, accept_unverified: bool
+    ) -> None:
+        """What leaves the machine is exactly the commit IT approved, and carries no secret in its history."""
+        dirty = porcelain(app)
+        if dirty:
+            raise FactoryError(
+                f"{app.name} has uncommitted changes never gated or approved: {', '.join(dirty[:6])}"
+            )
+        tip = rev_parse(app, branch)
+        if not item.approved_head:
+            if not accept_unverified:
+                raise FactoryError(
+                    f"'{item.slug}' was approved before approvals were tied to a commit, so {branch} "
+                    f"({tip[:8]}) cannot be verified. Publish with --accept-unverified to take responsibility"
+                )
+            item.log(
+                "unverified", f"IT accepted publishing {branch} at {tip[:8]} without a recorded approval"
+            )
+        elif tip != item.approved_head:
+            raise FactoryError(
+                f"{branch} is at {tip[:8]} but IT approved {item.approved_head[:8]}: the code moved "
+                "after the approval. Run the item again so the new state is gated and approved"
+            )
+        try:
+            hits = secrets_in_history(app, rev_range)
+        except ValueError as e:
+            raise FactoryError(str(e)) from e
+        if hits:
+            raise FactoryError(
+                "secrets found in the commits to publish:\n  "
+                + "\n  ".join(hits[:10])
+                + "\nremove them from "
+                "the history before publishing: a later commit deleting them does not help"
+            )
+
+    def _publish_app(self, item: WorkItem, host: GitHost, by: str, accept_unverified: bool) -> None:
         app = self.app_dir(item)
         prepare_project(app)  # a git repo with a local identity (a POC from the single agent has none yet)
         branch = current_branch(app)
@@ -777,8 +846,11 @@ class Foreman:
             # A change is in flight: publish the app as it was BEFORE it (the change goes as a pull request).
             open_change = next((i for i in self.store.all() if i.change_open and i.target == item.slug), None)
             branch = open_change.base_branch if open_change and open_change.base_branch else "main"
-        else:
-            commit_leftovers(app, item.slug)  # what is published is exactly HEAD
+        elif accept_unverified:
+            commit_leftovers(app, item.slug)  # legacy item: IT takes responsibility for the tree as it is
+        remote_branch = f"refs/remotes/origin/{branch}"
+        rev_range = f"origin/{branch}..{branch}" if ref_exists(app, remote_branch) else branch
+        self._verify_publishable(item, app, branch, rev_range, accept_unverified)
         if not item.repo_url:
             owner = self.cfg.delivery_owner or host.owner()
             name = f"{self.cfg.repo_prefix}{item.slug}"
@@ -834,14 +906,20 @@ class Foreman:
         ]
         return "\n".join(lines)
 
-    def _publish_change(self, item: WorkItem, host: GitHost, by: str) -> None:
+    def _publish_change(self, item: WorkItem, host: GitHost, by: str, accept_unverified: bool) -> None:
         if item.merged:
             raise FactoryError(f"'{item.slug}' is already merged")
         target = self._shipped_target(item.target)
         if not target.repo_url:
             raise FactoryError(f"publish the app first: `factory publish {item.target} --as it`")
         app = self.app_dir(item)
-        push_branch(app, f"factory/{item.slug}")
+        head = f"factory/{item.slug}"
+        base = item.base_branch or "main"
+        rev_range = (
+            f"origin/{head}..{head}" if ref_exists(app, f"refs/remotes/origin/{head}") else f"{base}..{head}"
+        )
+        self._verify_publishable(item, app, head, rev_range, accept_unverified)
+        push_branch(app, head)
         if item.pr_url:
             item.log("published", f"IT {by}: branch updated, pull request {item.pr_url}".replace("  ", " "))
             return
@@ -857,6 +935,15 @@ class Foreman:
         item.pr_state = "OPEN"
         item.log("published", f"IT {by}: pull request {item.pr_url}".replace("  ", " "))
 
+    def _move_target_head(self, change: WorkItem, tip: str) -> None:
+        """A merged change is approved work: the app's base now stands at its approved head."""
+        try:
+            target = self.store.load(change.target)
+        except KeyError:
+            return
+        target.approved_head = tip
+        self.store.save(target)
+
     def sync(self, item: WorkItem) -> WorkItem:
         """Read the pull request's state; once IT merged it on the host, fast-forward the local app to it."""
         host = self._host()
@@ -868,6 +955,7 @@ class Foreman:
             if state == "MERGED" and not item.merged:
                 tip = sync_merged_base(self.app_dir(item), item.slug, item.base_branch or "main")
                 item.merged = True
+                self._move_target_head(item, tip)
                 item.log("merged", f"on the host; {item.base_branch} is now at {tip[:8]}")
             elif state == "CLOSED":
                 item.log("closed", "the pull request was closed without merging")
@@ -1053,6 +1141,10 @@ class Foreman:
                     f"Claudo changed {', '.join(changed[:8])} after the approval: not shipped. "
                     "That content was never gated or seen by IT."
                 )
+        if (
+            item.gated_sha
+        ):  # only Claudo's bookkeeping moved HEAD (proven above): the gated content is unchanged
+            item.gated_sha = head_sha(app)
         report = self._review_report(item, app)
         if report and self._sha(report.read_text(encoding="utf-8")) != item.approved_review_sha256:
             review = self.engine.review_verdict(app, item.slug, item.claudo_cp)
@@ -1125,11 +1217,13 @@ class Foreman:
             },
         )
         self.store.write(item, "gate-report.md", format_report(results, item.maturity))
+        item.gated_sha = ""
         failed = [r for r in results if not r.ok]
         if failed:
             item.stage = "build"  # the next build gets this detail as feedback
             detail = "\n\n".join(f"[{r.name}] {r.detail}" for r in failed)
             return False, "gates failed:\n" + detail[-3000:]
+        item.gated_sha = head_sha(app)
         self.judge_artifact(item, "build")
         return True, "gates passed: " + ", ".join(r.name for r in results)
 

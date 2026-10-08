@@ -135,3 +135,34 @@ def format_report(results: list[GateResult], maturity: str) -> str:
     for r in results:
         out += [f"## {r.name}: {'PASS' if r.ok else 'FAIL'}", "", "```", r.detail, "```", ""]
     return "\n".join(out)
+
+
+def secrets_in_history(app_dir: Path, rev_range: str) -> list[str]:
+    """Secrets in the LINES ADDED by the commits of `rev_range`, `<sha>:<path>: <label>` each.
+
+    The secrets gate reads the working tree, but a publish pushes every commit: a key committed once and
+    deleted in a later commit is gone from the tree and still in the history that leaves the machine."""
+    p = subprocess.run(
+        ["git", "log", "-p", "--no-color", "--no-ext-diff", "--format=@@%H", rev_range],
+        cwd=app_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if p.returncode != 0:
+        raise ValueError(f"git log {rev_range} failed in {app_dir}: {(p.stderr or p.stdout).strip()[-300:]}")
+    hits: list[str] = []
+    sha = path = ""
+    for line in p.stdout.splitlines():
+        if line.startswith("@@") and len(line) >= 42:
+            sha, path = line[2:10], ""
+        elif line.startswith("+++ "):
+            path = line[4:].removeprefix("b/")
+        elif line.startswith("+") and sha:
+            for label, pat in SECRET_PATTERNS:
+                if pat.search(line):
+                    hit = f"{sha}:{path}: {label}"
+                    if hit not in hits:
+                        hits.append(hit)
+    return hits

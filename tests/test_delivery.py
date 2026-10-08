@@ -307,3 +307,122 @@ def test_delivery_defaults_to_off_and_rejects_unknown_providers(factory_root):
 
     with pytest.raises(ConfigError, match="expected 'none' or 'github'"):
         load_config(factory_root)
+
+
+# ------------------------------------------------------------------ only the approved commit leaves (C5)
+
+
+def commit(folder, name="extra.txt", text="x\n", message="more work"):
+    (folder / name).write_text(text, encoding="utf-8")
+    git(folder, "add", "-A")
+    git(folder, "commit", "-q", "-m", message)
+
+
+def test_publish_refuses_uncommitted_work_and_pushes_nothing(hosted):
+    app = shipped_app(hosted)
+    folder = hosted.cfg.apps_dir / app.slug
+    (folder / "extra.txt").write_text("never gated\n", encoding="utf-8")
+    with pytest.raises(FactoryError, match="uncommitted changes never gated or approved: extra.txt"):
+        hosted.publish(app, "it")
+    assert hosted.host.created == [] and not app.repo_url
+
+
+def test_publish_refuses_a_head_that_moved_after_the_approval(hosted):
+    app = shipped_app(hosted)
+    folder = hosted.cfg.apps_dir / app.slug
+    commit(folder)
+    with pytest.raises(FactoryError, match="the code moved after the approval"):
+        hosted.publish(app, "it")
+    assert hosted.host.created == []
+
+
+def test_a_secret_committed_then_deleted_still_blocks_the_publish(hosted):
+    app = shipped_app(hosted)
+    folder = hosted.cfg.apps_dir / app.slug
+    key = "AKIA" + "ABCDEFGHIJKLMNOP"  # assembled at runtime: no token-shaped literal in the repository
+    commit(folder, "config.py", f'KEY = "{key}"\n', "add config")
+    leaked = git(folder, "rev-parse", "--short=8", "HEAD")
+    (folder / "config.py").unlink()
+    git(folder, "add", "-A")
+    git(folder, "commit", "-q", "-m", "remove the key")
+    app.approved_head = git(folder, "rev-parse", "HEAD")  # as if IT had approved this exact commit
+    hosted.store.save(app)
+    with pytest.raises(
+        FactoryError, match=rf"secrets found in the commits to publish:\s+{leaked}:config.py: AWS"
+    ):
+        hosted.publish(app, "it")
+    assert hosted.host.created == []
+
+
+def test_a_legacy_item_without_a_recorded_approval_needs_accept_unverified(hosted):
+    app = shipped_app(hosted)
+    app.approved_head = ""  # approved before approvals were tied to a commit
+    with pytest.raises(FactoryError, match="--accept-unverified"):
+        hosted.publish(app, "it")
+    published = hosted.publish(app, "it", "bob", accept_unverified=True)
+    assert published.repo and any(h["event"] == "unverified" for h in published.history)
+
+
+def test_an_unverified_legacy_publish_takes_the_tree_as_it_is(hosted):
+    app = shipped_app(hosted)
+    app.approved_head = ""
+    folder = hosted.cfg.apps_dir / app.slug
+    (folder / "extra.txt").write_text("legacy work\n", encoding="utf-8")
+    hosted.publish(app, "it", accept_unverified=True)
+    remote = hosted.host.base / f"app-{app.slug}.git"
+    assert git(remote, "rev-parse", "main") == git(folder, "rev-parse", "HEAD")
+
+
+def test_a_change_must_also_be_the_commit_it_approved(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    folder = hosted.cfg.apps_dir / app.slug
+    commit(folder)  # a commit on factory/<slug> after IT approved
+    with pytest.raises(FactoryError, match="the code moved after the approval"):
+        hosted.publish(ch, "it")
+    assert hosted.host.prs == []
+
+
+def test_a_merged_change_moves_the_apps_approved_head_so_it_can_be_published_again(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    ch = hosted.publish(ch, "it")
+    hosted.host.merge_on_host(f"app-{app.slug}", f"factory/{ch.slug}")
+    hosted.sync(ch)
+    folder = hosted.cfg.apps_dir / app.slug
+    assert hosted.store.load(app.slug).approved_head == git(folder, "rev-parse", "HEAD")
+    again = hosted.publish(hosted.store.load(app.slug), "it")  # the new base is the approved one
+    assert again.repo_url
+
+
+def test_a_local_merge_also_moves_the_apps_approved_head(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.merge(ch, "it", "bob")
+    folder = hosted.cfg.apps_dir / app.slug
+    assert hosted.store.load(app.slug).approved_head == git(folder, "rev-parse", "HEAD")
+
+
+# ------------------------------------------------------------------ IT approves what the gates judged
+
+
+def test_approval_is_refused_if_the_app_moved_after_the_gates(foreman):
+    item = foreman.run(foreman.intake("Z", "an api", "poc"))
+    item = foreman.approve(item, "business")
+    item = foreman.approve(item, "owner")  # builds and gates; waits for IT
+    assert item.stage == "ship_review" and item.gated_sha == ""  # offline POC: not a git project yet
+    item.gated_sha = "0" * 40  # pretend the gates judged another commit
+    prepare = foreman.app_dir(item)
+    from factory.project import prepare_project
+
+    prepare_project(prepare)
+    with pytest.raises(FactoryError, match="the app changed after the gates ran"):
+        foreman.approve(item, "it")
+
+
+def test_approval_commits_an_app_that_was_never_in_git_and_records_its_head(foreman):
+    item = foreman.run(foreman.intake("Z", "an api", "poc"))
+    item = foreman.approve(foreman.approve(item, "business"), "owner")
+    folder = foreman.app_dir(item)
+    assert not (folder / ".git").exists()
+    done = foreman.approve(item, "it")
+    assert done.approved_head == git(folder, "rev-parse", "HEAD") and (folder / ".git").exists()

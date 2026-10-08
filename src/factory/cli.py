@@ -123,7 +123,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
 def cmd_publish(args: argparse.Namespace) -> int:
     f = _foreman(args, "offline")
-    item = f.publish(f.store.load(args.slug), args.role, args.by)
+    item = f.publish(f.store.load(args.slug), args.role, args.by, args.accept_unverified)
     if item.kind == "app":
         print(f"Published {item.slug}: private repository {item.repo}")
         print(f"  {item.repo_url}")
@@ -384,6 +384,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("publish", help="IT: push a shipped app to its private repo / open a pull request")
     sp.add_argument("slug")
     role_opt(sp, ("it",))
+    sp.add_argument(
+        "--accept-unverified",
+        action="store_true",
+        help="publish an item approved before approvals were tied to a commit (you take responsibility)",
+    )
     sp.set_defaults(func=cmd_publish)
 
     sp = sub.add_parser("sync", help="after the pull request was merged on the host, update the local app")

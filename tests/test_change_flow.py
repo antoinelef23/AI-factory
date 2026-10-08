@@ -1,3 +1,4 @@
+import os
 import subprocess
 
 import pytest
@@ -203,7 +204,12 @@ def test_the_target_app_disappearing_blocks_the_change_with_a_reason(foreman):
 
     app = shipped_app(foreman)
     ch = foreman.intake_change(app.slug, "Add a thing", "add a thing")
-    shutil.rmtree(foreman.cfg.apps_dir / app.slug)
+
+    def force(func, path, _exc):  # git objects are read-only on Windows
+        os.chmod(path, 0o700)
+        func(path)
+
+    shutil.rmtree(foreman.cfg.apps_dir / app.slug, onexc=force)
     ch = foreman.run(ch)
     assert ch.status == "blocked" and "folder" in ch.feedback and "missing" in ch.feedback
 

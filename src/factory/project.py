@@ -394,3 +394,14 @@ def post_approval_changes(app: Path, slug: str, since: str) -> list[str]:
             continue
         problems.append(name)
     return problems
+
+
+def ref_exists(app: Path, ref: str) -> bool:
+    return (
+        subprocess.run(["git", "rev-parse", "--verify", "-q", ref], cwd=app, capture_output=True).returncode
+        == 0
+    )
+
+
+def rev_parse(app: Path, ref: str) -> str:
+    return _git(app, "rev-parse", ref)
