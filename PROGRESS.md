@@ -12,12 +12,14 @@ branch tracks `portable` and `remote.pushDefault = portable` so a plain `git pus
 **CI is green** on GitHub (Windows + Ubuntu for the factory; Claudo's own gate workflow on Linux).
 The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
-**Verification command:** `just check` (ruff check + format check + pytest). Last run (2026-10-08, local):
-**502 passed, 2 skipped** (the skipped ones are the billed calibration tests, `just calibrate`). Pushed and green in
-GitHub CI on Windows and Ubuntu: `cebbbf6`. **Not pushed yet**: the correction commits after it (waiting for
-Antoine's go, see CORRECTIONS.md section 0). The real-engine integration tests skip in CI (no Claudo checkout).
-Claudo (`AI-Workflow-gates/_build`, separate repo): `just gate-ci` green on Windows (1084 passed) after commit
-`b9b96c7` (nonce-bound tokens, reviewer reuse), which is **local only**, not pushed to `portable`.
+**Verification command:** `just check` (ruff check + format check + pytest). Last run (2026-10-08, local, exit
+codes checked): **520 passed, 2 skipped** (the skipped ones are the billed calibration tests, `just calibrate`).
+Pushed and green in GitHub CI on Windows and Ubuntu: `cebbbf6`. **Not pushed yet**: every commit after it (waiting
+for Antoine's go, see CORRECTIONS.md sections 0 and 4). The real-engine integration tests skip in CI.
+Claudo (`AI-Workflow-gates/_build`, separate repo): `just gate-ci` green on Windows (1084 + 202 tests) at
+`94202b4`. Three commits are **local only**, not pushed to `portable`: `b9b96c7` (nonce-bound tokens, reviewer
+reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens flagged, agent environment test).
+**Push Claudo first**: the factory relies on them and says so on the item when they are missing.
 
 ### The 2026-10-08 review and its corrections
 Opus reviewed everything Sonnet built (CORRECTIONS.md has the findings with their evidence, and the plan). Sonnet
@@ -31,7 +33,9 @@ then applied the plan. Status per item:
 | 4 gates | G-1 unparseable manifest blocks; G-2 secrets coverage; G-3 git-tracked files scanned; G-4 rewritten tests; G-5 plan frozen; G-6 plan scope check | done, tested |
 | 5 spec / process | S-1 spec prompts + `judge_from` (default off) + calibration case; P-1 live-run protocol in CLAUDE.md; L-1 report path; L-5 Run log heading | done, tested (the billed judge test was NOT run) |
 | 6 docs | L-2 this file; L-3 README; L-4 ROADMAP | done |
-| outward | O-1 close PR #1 and abandon the change; O-2 delete the smoke repo; O-3 rotate the scratch secret | **waiting for Antoine** |
+| judge review (section 4) | J-1 rejection after a re-decision reworks; J-2 review reuse keyed on the reviewed tree (Claudo); J-3 refusals name `factory reject`/`factory change`; J-4 history scan labels + merges; J-5 runtime ignores in `.git/info/exclude`; J-6 scope heuristic warns, never blocks (+ the clause regex held backspace bytes); J-7 nonce for items paused before the upgrade; J-8 older Claudo reported; J-9 abandon checks the tree first; J-10 weak tests replaced; J-11 unbound tokens flagged; J-12 committed dependencies not scanned | done, tested (Opus) |
+| process | J-13: squash the red commit `ed12a15` with its fix `c6fb938` before pushing | **Antoine's call** (local history only) |
+| outward | O-1 close PR #1 and abandon the change; O-2 delete the smoke repo | **waiting for Antoine** (O-3, the scratch secret, is done) |
 | billed | V-1 re-run the change through Claudo; V-2 real GitHub merge + `sync` | **waiting for Antoine** |
 
 ### Roadmap items done
@@ -160,10 +164,12 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 
 ## Next steps (in order)
 1. **Antoine decides** (CORRECTIONS.md section 0): O-1 close PR #1 and abandon `about-endpoint`; O-2 delete
-   `app-ping-service` (needs `! gh auth refresh -h github.com -s delete_repo`); push the correction commits to
-   `AI-factory` and Claudo's `b9b96c7` to `portable` (never `origin`); `judge_from = "mvp"`.
+   `app-ping-service` (needs `! gh auth refresh -h github.com -s delete_repo`); squash `ed12a15`+`c6fb938` or not;
+   push Claudo's three local commits to `portable` (never `origin`) FIRST, then the factory commits to
+   `AI-factory`; `judge_from = "mvp"`.
 2. V-1: re-run the same change from a snapshot of the fixed HEAD (~$2.4 for the app, ~$3 for the change). Expected:
-   no BHV-4, or a `scope_drift` stop that waits for Antoine; no `.approvals/` in git; no second review.
+   no BHV-4, or a `scope_drift` stop that waits for Antoine; no `.approvals/` in git; the post-approval resume
+   logs `review_reused` (no second paid review); if IT rejects, the tasks are really reworked (J-1).
 3. V-2: publish the app and the change, Antoine merges the PR on GitHub (squash), `factory sync`, `factory drift`.
 4. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
 5. Radar importers for Backstage/other formats; P2-4 CI status as a gate; P2-5 GitHub issue intake.

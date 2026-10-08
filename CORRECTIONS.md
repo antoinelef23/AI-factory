@@ -464,6 +464,12 @@ including a committed `node_modules/` or `vendor/` (slow, noisy). Remediation: k
 `ed12a15` with its fix `c6fb938` (local history only, Antoine's call); in every verification chain use
 `set -o pipefail` or check pytest's own exit code, never `pytest | tail` before a commit.
 
+**Status (2026-10-08):** J-1 to J-12 are fixed, one commit each, `just check` green after each (last: 520
+passed, 2 skipped) and Claudo `gate-ci` green for J-2/J-10/J-11. Found while fixing J-6: the clause regex of G-6
+held literal backspace bytes instead of `\b` (fixed, pinned by a test; both repos scanned, no other control
+character). J-1 was extended: a ship blocked after Claudo's final run is also a consumed checkpoint, so the
+rejection J-3 now recommends reworks too. J-13's squash is left to Antoine.
+
 ### 4.3 Order
 J-1, then J-2 (Claudo), J-7, J-8, J-3, J-4, J-5, J-6, J-9 to J-12, J-13: one commit each, `just check` (and
 `just gate-ci` for Claudo) green before the next; then the pushes Antoine approves; then V-1/V-2. V-1 is the real
