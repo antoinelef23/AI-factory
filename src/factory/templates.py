@@ -57,7 +57,7 @@ validated_by:
 ### BHV-1: service is reachable
 - **Given** the application is running
 - **When** a client calls `GET /health`
-- **Then** it answers HTTP 200 with `{{"status": "ok"}}`
+- **Then** it answers HTTP 200 with a JSON body whose `status` is `"ok"` (other fields allowed)
 
 ### BHV-2: core use case
 - **Given** a user of {item.title}
@@ -144,7 +144,8 @@ Read idea.md in the current directory. Write spec.md for it, in the format below
 Rules: every statement testable with a stable ID (INV-n, BHV-n, EX-n, EVAL-n); no vague words
 without numbers; realistic examples; explicit non-goals; one eval per BHV/INV: every INV and every BHV must
 appear in the Covers column of at least one EVAL row, and each ID is defined exactly once.
-Always include BHV-1 = `GET /health` returns 200 {{"status": "ok"}} and
+Always include BHV-1 = `GET /health` returns 200 with a JSON body whose `status` is "ok" (IT's golden
+path adds fields such as `app` and `env`: require `status`, never an exact body), and
 INV-1 = only technologies allowed by the company tech radar at maturity `{item.maturity}`.
 Do not choose technologies: that is the design's job.
 Every BHV must be something idea.md asks for: add no edge-case behaviour (trailing slashes, near-miss

@@ -197,3 +197,26 @@ def test_with_run_log_is_idempotent_and_ends_the_plan_with_a_table():
 def test_every_plan_the_foreman_stores_ends_with_the_run_log(foreman):
     item = foreman.approve(foreman.run(foreman.intake("Y", "an api", "poc")), "business")
     assert "## Run log" in foreman.store.read(item, "tasks.md")
+
+
+# ------------------------------------------------------------ mandated /health agrees with the golden path
+
+
+def test_the_mandated_health_behaviour_matches_the_golden_path():
+    """V-1 (2026-10-08) blocked on OQ-1: the spec rule demanded exactly {"status": "ok"} while IT's golden
+    path returns status, app and env. Antoine chose the subset rule: template, prompt, golden path agree."""
+    from pathlib import Path
+
+    from factory.templates import offline_spec, spec_prompt
+    from factory.workitem import WorkItem
+
+    item = WorkItem(slug="x", title="X", idea="an api", maturity="mvp")
+    prompt = spec_prompt(item, "")
+    assert 'whose `status` is "ok"' in prompt and "never an exact body" in prompt
+    assert '{"status": "ok"}' not in prompt
+    assert "other fields allowed" in offline_spec(item)
+    golden = Path(__file__).resolve().parents[1] / "golden_paths" / "python-fastapi"
+    assert '"app":' in (golden / "app" / "main.py").read_text(encoding="utf-8")  # the extra fields exist
+    assert 'response.json()["status"] == "ok"' in (golden / "tests" / "test_health.py").read_text(
+        encoding="utf-8"
+    )
