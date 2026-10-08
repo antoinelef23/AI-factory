@@ -12,8 +12,27 @@ branch tracks `portable` and `remote.pushDefault = portable` so a plain `git pus
 **CI is green** on GitHub (Windows + Ubuntu for the factory; Claudo's own gate workflow on Linux).
 The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
-**Verification command:** `just check` (ruff check + format check + pytest). Last run: **402 passed, 1 skipped** (delivery added 23) (also green in GitHub CI on Windows and Ubuntu; the real-engine integration tests skip there because no Claudo checkout is present) (the skipped one is the billed calibration, `just calibrate`).
-Claudo (`AI-Workflow-gates/_build`, separate repo, 6 local commits): `just gate-ci` green on **Windows and Linux (WSL)**.
+**Verification command:** `just check` (ruff check + format check + pytest). Last run (2026-10-08, local):
+**502 passed, 2 skipped** (the skipped ones are the billed calibration tests, `just calibrate`). Pushed and green in
+GitHub CI on Windows and Ubuntu: `cebbbf6`. **Not pushed yet**: the correction commits after it (waiting for
+Antoine's go, see CORRECTIONS.md section 0). The real-engine integration tests skip in CI (no Claudo checkout).
+Claudo (`AI-Workflow-gates/_build`, separate repo): `just gate-ci` green on Windows (1084 passed) after commit
+`b9b96c7` (nonce-bound tokens, reviewer reuse), which is **local only**, not pushed to `portable`.
+
+### The 2026-10-08 review and its corrections
+Opus reviewed everything Sonnet built (CORRECTIONS.md has the findings with their evidence, and the plan). Sonnet
+then applied the plan. Status per item:
+
+| Phase | Items | Status |
+|---|---|---|
+| 1 security | C2-a tokens never committed; C2-b per-round nonce (Claudo + bridge); C3-sec secret out of the factory tree | done, tested |
+| 2 ships what was approved | C3 scope drift committed apart + IT acknowledgement; C4 nothing ungated after approval, moved verdict goes back to IT (Claudo reuses an unchanged review); C5 publish only the approved commit, history secret scan | done, tested |
+| 3 delivery | C6 crash-safe publish; C7 one merge path; C8 abandon closes the PR; D-1..D-4 | done, tested |
+| 4 gates | G-1 unparseable manifest blocks; G-2 secrets coverage; G-3 git-tracked files scanned; G-4 rewritten tests; G-5 plan frozen; G-6 plan scope check | done, tested |
+| 5 spec / process | S-1 spec prompts + `judge_from` (default off) + calibration case; P-1 live-run protocol in CLAUDE.md; L-1 report path; L-5 Run log heading | done, tested (the billed judge test was NOT run) |
+| 6 docs | L-2 this file; L-3 README; L-4 ROADMAP | done |
+| outward | O-1 close PR #1 and abandon the change; O-2 delete the smoke repo; O-3 rotate the scratch secret | **waiting for Antoine** |
+| billed | V-1 re-run the change through Claudo; V-2 real GitHub merge + `sync` | **waiting for Antoine** |
 
 ### Roadmap items done
 
@@ -80,33 +99,43 @@ examples, an invented requirement, vague outcomes). Findings:
 - Cost mechanics: 93% of a haiku judge call was hidden thinking; capping thinking missed invented requirements.
 - Quote grounding rejected valid evidence when judges stitch passages with "..."; now every fragment must occur in order.
 
-### Live change run through real Claudo (2026-10-08, on a shipped MVP app `ping-service`)
-`factory change` -> spec -> design -> plan (1 plan-lint retry) -> build on branch `factory/about-endpoint` ->
-gates -> IT approval. **$3.41 total** (cap `budget_usd = 3` per orchestrator run; build $2.61, the approval step's
-Claudo resume $0.80), 3 tasks, 20 tests green on HEAD, ruff clean. What it showed:
-1. The change flow works end to end with the real engine: scoped per-task commits, signed approval, no cap breach.
-2. **Claudo's reviewer returned BLOCK and the BLOCK was real but stale**: the build agent edited `app/main.py`
-   (`redirect_slashes=False`, needed by its own eval) outside every task's `files_touched`, so it was uncommitted
-   when the reviewer ran. The factory's leftovers commit put it on HEAD afterwards, and HEAD was verified clean (20
-   passed). IT approved with `--note` explaining exactly that, which is the `--note` rule working as designed. The
-   reviewer runs BEFORE the leftovers commit, so a stale BLOCK can recur; see open risks.
-3. Delivery smoke on real GitHub: `publish` created PRIVATE `antoinelef23/app-ping-service` (GitHub reports
-   `PRIVATE`) and pushed `main` while the change was in flight; `publish` of the change opened PR #1
-   (`factory/about-endpoint` -> `main`) whose body shows intent, gates, the BLOCK verdict, approvals + IT's note.
-   The PR was left OPEN for IT to merge; `sync` reports OPEN. The merge + `sync` path is covered by tests with a
-   local bare repo but NOT yet run against real GitHub.
+### Live change run through real Claudo (2026-10-08, shipped MVP app `ping-service`): what really happened
+`factory change` -> spec -> design -> plan (1 plan-lint retry) -> build on `factory/about-endpoint` -> gates -> IT
+approval. **$3.41**: spec+plan $0.32, Claudo build $2.29, the post-approval resume **$0.80** (a second Opus review),
+3 tasks, 20 tests green, ruff clean, under the $3 per-run cap. The engine path works. **The result must not be
+merged**; an earlier version of this file called the reviewer's BLOCK "real but stale" and the `--note` rule "working
+as designed". That was wrong. The chain:
+1. The spec invented BHV-4 (`GET /about/` -> 404), which the idea never asked for and which, under FastAPI defaults
+   (307), contradicts INV-3 ("the only permitted change is that `GET /about` no longer returns 404"). -> S-1.
+2. The plan's T2 listed only the test in `files_touched` while its prompt authorised editing `app/main.py`. -> G-6.
+3. The implementer set `redirect_slashes=False` globally: `GET /health/` and `GET /version/` now return 404
+   instead of 307. Claudo's scoped commit skipped the file. -> C3.
+4. The reviewer saw the uncommitted edit (BLOCK); the factory then committed it in a `chore` commit with no spec ID;
+   the trajectory gate, which only checks task commits, passed. -> C3.
+5. Claudo's post-approval run re-reviewed, said WARN and named the regression explicitly; the factory showed the
+   old verdict and published without gating that run. -> C4.
+6. The scripted persona "Bob" approved over the BLOCK with a note that addressed "uncommitted" only. -> P-1.
+7. Approval tokens were committed and pushed with the app. -> C2.
+The remote artefacts: private repo `antoinelef23/app-ping-service` (PRIVATE) and its PR #1, **left open on
+purpose**: close it, do not merge it (CORRECTIONS.md O-1, O-2).
 
-### Delivery to GitHub (done 2026-10-08)
+### Delivery to GitHub (2026-10-08, hardened after the review)
 `[delivery] provider = "github"` (off by default). `factory publish` (IT): shipped app -> private repo
-`<repo_prefix><slug>`, base branch pushed; approved change -> branch pushed + pull request. `factory sync`: after IT
-merged the PR on the host, fast-forward the local app (ff-only, refuses a diverged base). By construction: no
-visibility setting (`--private` hardcoded, tested), the factory never merges, refuses to push into a repo it did not
-create, refuses to repoint an existing remote, local `merge` is refused once a PR exists.
+`<repo_prefix><slug>`; approved change -> branch + pull request. `factory sync`: after IT merged on the host,
+fast-forward the local app (ff, squash and merge-commit merges tested). By construction: no visibility setting
+(`--private` hardcoded, tested), the factory never merges, never pushes into a repo it did not create, never repoints
+a remote. Since the review: only the commit IT approved leaves (dirty tree, moved head and history secrets refused;
+legacy items need `--accept-unverified`), the repo is recorded the moment it exists (a failed push no longer orphans
+it), a published app's changes can only merge through their PR, and `abandon` closes the PR and deletes its branch.
 
 ## Not verified
 - The judge enabled during a Claudo-built item (`judge = true`) end to end with real models.
 - Sandbox runner (Docker) on Windows; the bind-mount path form is unit-tested only.
-- `sync` after a REAL merge on GitHub (PR #1 of `app-ping-service` is open; merge it, then `factory sync about-endpoint`).
+- `sync` after a REAL merge on GitHub (tested only against local bare repos; V-2).
+- The corrected pipeline against a real Claudo run (V-1): the nonce, review reuse, scope-drift and post-approval
+  checks are tested with doubles and Claudo's own unit tests, not yet end to end.
+- The billed judge test on the about-endpoint spec (`pytest -m live --live -k edge_case`).
+- `judge_from` with real models. `abandon` and `publish --accept-unverified` against real GitHub.
 
 ## Open risks / known limits
 - Text matching of technology names: an alias that is also an everyday word ("requests") produced false positives on
@@ -119,13 +148,22 @@ create, refuses to repoint an existing remote, local `merge` is refused once a P
 - Claudo's two Opus reviews dominate MVP cost (above).
 - Only one golden path (python-fastapi).
 
-- The Claudo reviewer reads the tree BEFORE the factory's leftovers commit, so it can BLOCK on work that is
-  committed a moment later (seen live). Possible fix: commit leftovers before the reviewer panel runs.
-- `gh` is the only git host adapter; GitLab/Bitbucket would implement the same 5-method `GitHost` protocol.
+- The Claudo reviewer still reads the tree BEFORE the factory commits leftovers. That is now harmless: what it
+  missed is committed apart, flagged `scope_drift`, and IT must acknowledge it with a note.
+- `uv.lock` rewritten by a build is outside every task scope, so it raises a `scope_drift` acknowledgement. Expected
+  noise until a lockfile allowance is decided.
+- The plan scope check (G-6) is a heuristic over clauses of the task prompt: it misses a path named in a clause
+  without a write verb. It narrows the gap, it does not close it (C3 is the backstop).
+- Claudo names a consumed token `.handled-<second>`: two checkpoints consumed in the same second would collide on
+  Windows. Real resumes are minutes apart; not fixed.
+- `gh` is the only git host adapter; GitLab/Bitbucket would implement the same 6-method `GitHost` protocol.
 
 ## Next steps (in order)
-1. P1-7: sandbox runner by default for MVP+ builds. NOT a quick win: Claudo's sandbox needs an egress-allowlist proxy
-   that does not exist yet (its own backlog) and Docker is not running here; needs a decision and a setup session.
-2. Radar importers for Backstage/other formats; P2-5 GitHub issue intake (delivery itself and the live change run are done).
-3. Ask Antoine before spending more: a live run through the reject path (~$3-4) and `judge = true` end to end (~$0.5).
-4. Merge PR #1 of `app-ping-service` yourself, then `factory sync about-endpoint` to close the loop on real GitHub.
+1. **Antoine decides** (CORRECTIONS.md section 0): O-1 close PR #1 and abandon `about-endpoint`; O-2 delete
+   `app-ping-service` (needs `! gh auth refresh -h github.com -s delete_repo`); push the correction commits to
+   `AI-factory` and Claudo's `b9b96c7` to `portable` (never `origin`); `judge_from = "mvp"`.
+2. V-1: re-run the same change from a snapshot of the fixed HEAD (~$2.4 for the app, ~$3 for the change). Expected:
+   no BHV-4, or a `scope_drift` stop that waits for Antoine; no `.approvals/` in git; no second review.
+3. V-2: publish the app and the change, Antoine merges the PR on GitHub (squash), `factory sync`, `factory drift`.
+4. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
+5. Radar importers for Backstage/other formats; P2-4 CI status as a gate; P2-5 GitHub issue intake.

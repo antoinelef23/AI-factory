@@ -338,6 +338,19 @@ green on Windows; factory `just check` green.
 | P2-7 | Commit format | Commits follow Claudo's canonical format (`Why:` body, trailers `Spec-IDs`, `Checkpoint`, `Run`) |
 | P2-8 | Git-host abstraction | Interface with GitHub first; GitLab and Azure DevOps stubs |
 
+**Status (2026-10-08, after the review in CORRECTIONS.md):**
+
+| ID | Status | What exists / what is missing |
+|---|---|---|
+| P2-1 | partial | `factory publish` creates a PRIVATE repo per app and pushes the approved commit. Missing: creating it from the golden path *template* repo, and the branch-protection check |
+| P2-2 | partial | One branch `factory/<slug>` and one PR per change, with intent, gates, reviewer verdict, acknowledgements, approvals, cost. Not per build attempt |
+| P2-3 | partial | `factory sync` detects the merge (ff, squash and merge-commit) and updates the local app. Manual: no webhook, no `pr_open` stage |
+| P2-4 | open | CI status of the PR is not read back as a gate |
+| P2-5 | open | No GitHub issue intake |
+| P2-6 | done | `factory change` (feature / bug / migration) on a branch of the existing app, design = existing stack judged by the current radar, tests that rewrite existing tests need IT's acknowledgement |
+| P2-7 | partial | Factory commits carry `Why:` and `Run:` trailers; task commits come from Claudo's own format |
+| P2-8 | done | `GitHost` protocol (6 methods) with a `gh` adapter and a test double over real bare repos. No GitLab / Azure stubs |
+
 **Exit criteria:** from a labelled GitHub issue to a merged PR on a new repo, with the factory commenting
 each checkpoint; the factory token has no merge permission (verified by test against branch protection);
 a feature item on an existing repo produces a PR whose diff passes the radar gate.

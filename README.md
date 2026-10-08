@@ -31,6 +31,10 @@ idea --> triage --> spec --> [business] --> design --> [IT*] --> plan --> [owner
 - `*` IT design review is skipped for POV/POC when the whole stack is allowed. From MVP up it always happens.
 - **Gates per maturity** (`factory.toml [gates]`): radar guard (manifests, imports, Docker images, design doc),
   secrets scan, tests, lint. A failed gate blocks the item and feeds the report to the next build attempt.
+  The radar guard analyses Python (`pyproject.toml` incl. Poetry, `requirements*.txt`) and JavaScript manifests; a
+  manifest it cannot parse **blocks**, and one from an ecosystem it does not analyse (`go.mod`, `pom.xml`,
+  `build.gradle`, `Cargo.toml`, `Gemfile`, `composer.json`) needs IT's review. In a git project it scans everything
+  git tracks, whatever the folder is called.
 - **Apps start from IT golden paths** (`golden_paths/`), so the CI, Dockerfile and layout are IT's, not the agent's.
 - Artifacts use Claudo's triplet format (`spec.md`, `design.md`, `tasks.md`) and travel with the app in
   `apps/<slug>/work/<slug>/`. `factory export` hands them to a Claudo project.
@@ -123,9 +127,19 @@ uv run factory sync add-csv-export                       # after IT merged the P
 
 Safety is built in rather than configured: the only way the factory creates a repository is `--private` (there is
 no visibility setting), it **never merges** (the pull request is IT's to merge on GitHub), it refuses to push into
-a repository that already exists under that name, and nothing leaves the machine unless IT runs `publish`. The pull
-request carries the intent, gate results, the Claudo reviewer's verdict, the approvals and the cost. Once a pull
-request exists, the local `factory merge` is refused so there is a single way to merge.
+a repository that already exists under that name, and nothing leaves the machine unless IT runs `publish`.
+
+What leaves is **exactly the commit IT approved**: the gates record the commit they judged, IT's approval is
+refused if the app moved since and records the approved commit, and `publish` refuses a dirty tree, a tip that
+differs from the approved commit, and any secret in the lines the pushed commits add (a key deleted by a later
+commit is still caught). Items approved before this existed need `publish --accept-unverified`. The pull request
+carries the intent, gate results, the Claudo reviewer's verdict, what IT had to acknowledge, the approvals and the
+cost.
+
+Once an app is published, its changes can only be merged through their pull request: the local `factory merge` is
+refused (it would diverge from the host). `factory abandon` closes the change's open pull request and deletes its
+remote branch; a pull request already merged on the host is `factory sync`'s, not abandon's. A failed push does not
+orphan the repository: it is recorded the moment it is created, and the next `publish` reuses it.
 
 ## Bring your own radar
 
@@ -163,7 +177,7 @@ in `factory.toml`, else `$CLAUDO_HOME`, else a sibling `../AI-Workflow-gates/_bu
 |---|---|
 | plan | Every `tasks.md` is checked by **Claudo's own plan-lint** (the factory does not re-implement it). An agent plan that fails is re-prompted with the lint errors (`plan_lint_retries`), then blocked. |
 | build (MVP and above) | The orchestrator runs the approved plan **task by task**: dependency DAG, per-task verify, eval gate, reviewer panel, one scoped git commit per task. Below `build_from` (default `mvp`) a single agent builds: see costs. |
-| ship | The factory stops the orchestrator where it pauses for its human checkpoint, runs its own gates, and parks the item at IT's ship review. IT's approval writes a **signed (HMAC) token** carrying the approver's name; the secret lives in `.factory/` (git-ignored, outside every app). An agent cannot self-approve. |
+| ship | The factory stops the orchestrator where it pauses for its human checkpoint, runs its own gates, and parks the item at IT's ship review. IT's approval writes a **signed (HMAC) token** carrying the approver's name, bound to a per-round nonce so a token left in a tree cannot be replayed. The secret lives in your per-user state directory (`%LOCALAPPDATA%\ai-factory` or `$XDG_STATE_HOME/ai-factory`), outside the factory and every app, and is withheld from the orchestrator's agents. An agent that can only write files cannot self-approve. **Residual risk:** an agent that can run arbitrary code as your user could read that secret (Claudo's documented M4); only the sandbox (ROADMAP P1-7) closes it. After the approval Claudo may change nothing but its own bookkeeping, or the ship is blocked. Anything a build edited outside every task's scope, and any existing test it rewrote, is committed apart and needs IT's `--note`. |
 
 No Claudo found: the factory still runs, plans are simply not linted and everything builds with the single agent.
 
@@ -213,5 +227,4 @@ golden_paths/       IT project templates (python-fastapi: app, evals, justfile, 
 src/factory/        radar, detect, guard, gates, design compiler, foreman, agents, judge, claudo bridge, cli
 work/<slug>/        one folder per work item: item.json + idea/spec/design/tasks/gate-report/judge-*/plan-lint
 apps/<slug>/        shipped apps (each its own git repo once built through Claudo)
-.factory/           factory secrets (git-ignored)
 ```

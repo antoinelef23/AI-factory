@@ -9,6 +9,8 @@ repo (and `just gate-ci` in `AI-Workflow-gates/_build` for Claudo items), run an
 Severity: **C** = critical (do not ship / security), **H** = high (wrong result can reach GitHub), **M** = medium
 (gate can be blinded or misled), **L** = low (docs, cosmetics).
 
+**Status (2026-10-08, end of the first application pass):** phases 1 to 6 are implemented and tested (see PROGRESS.md for the table). Still open and waiting for Antoine: O-1, O-2, O-3 (touch GitHub or his scratch secret), the pushes, and V-1, V-2 (billed). The findings below are kept as the record.
+
 ---
 
 ## 0. Decisions only Antoine can take (block the matching items)
