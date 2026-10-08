@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from tests.conftest import JudgingAgentRunner
@@ -107,7 +109,8 @@ def test_judge_from_must_be_a_maturity(factory_root):
 
     toml = factory_root / "factory.toml"
     toml.write_text(
-        toml.read_text(encoding="utf-8").replace('judge_from = ""', 'judge_from = "soon"'), encoding="utf-8"
+        re.sub(r'judge_from = "[^"]*"', 'judge_from = "soon"', toml.read_text(encoding="utf-8")),
+        encoding="utf-8",
     )
     with pytest.raises(ConfigError, match="judge_from"):
         load_config(factory_root)

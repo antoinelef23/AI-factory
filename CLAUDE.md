@@ -8,7 +8,7 @@ Read `PROGRESS.md` first: it holds the last verified state and the next step. Th
 
 `just check` (ruff check, ruff format --check, pytest; offline, free, a few minutes). Done means it ran and passed
 in this session. Judge it by pytest's OWN exit code: never `pytest | tail` in a chain that commits (a pipe hid four
-red tests once, `ed12a15`); redirect to a file and test `$?`, or use `set -o pipefail`. Write code through files
+red tests once; that commit was squashed with its fix before the push); redirect to a file and test `$?`, or use `set -o pipefail`. Write code through files
 or the editor, not through shell heredocs: they collapsed `\n` and turned `\b` into backspace bytes here.
 Billed tests (`-m live`, `just calibrate`) never run without Antoine's go.
 

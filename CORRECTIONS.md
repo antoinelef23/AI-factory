@@ -468,7 +468,8 @@ including a committed `node_modules/` or `vendor/` (slow, noisy). Remediation: k
 passed, 2 skipped) and Claudo `gate-ci` green for J-2/J-10/J-11. Found while fixing J-6: the clause regex of G-6
 held literal backspace bytes instead of `\b` (fixed, pinned by a test; both repos scanned, no other control
 character). J-1 was extended: a ship blocked after Claudo's final run is also a consumed checkpoint, so the
-rejection J-3 now recommends reworks too. J-13's squash is left to Antoine.
+rejection J-3 now recommends reworks too. J-13: with Antoine's go, `ed12a15` and `c6fb938` were squashed into
+one green commit (`fix(ux): change report paths, ...`) before the push; the hashes above no longer exist.
 
 ### 4.3 Order
 J-1, then J-2 (Claudo), J-7, J-8, J-3, J-4, J-5, J-6, J-9 to J-12, J-13: one commit each, `just check` (and

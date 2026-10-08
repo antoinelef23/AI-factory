@@ -43,7 +43,7 @@ then applied the plan. Status per item:
 | 5 spec / process | S-1 spec prompts + `judge_from` (default off) + calibration case; P-1 live-run protocol in CLAUDE.md; L-1 report path; L-5 Run log heading | done, tested (the billed judge test was NOT run) |
 | 6 docs | L-2 this file; L-3 README; L-4 ROADMAP | done |
 | judge review (section 4) | J-1 rejection after a re-decision reworks; J-2 review reuse keyed on the reviewed tree (Claudo); J-3 refusals name `factory reject`/`factory change`; J-4 history scan labels + merges; J-5 runtime ignores in `.git/info/exclude`; J-6 scope heuristic warns, never blocks (+ the clause regex held backspace bytes); J-7 nonce for items paused before the upgrade; J-8 older Claudo reported; J-9 abandon checks the tree first; J-10 weak tests replaced; J-11 unbound tokens flagged; J-12 committed dependencies not scanned | done, tested (Opus) |
-| process | J-13: squash the red commit `ed12a15` with its fix `c6fb938` before pushing | **Antoine's call** (local history only) |
+| process | J-13: the red commit and its fix were squashed into one green commit before the push (Antoine's go) | done |
 | outward | O-1 close PR #1 and abandon the change; O-2 delete the smoke repo | **waiting for Antoine** (O-3, the scratch secret, is done) |
 | billed | V-1 re-run the change through Claudo; V-2 real GitHub merge + `sync` | **waiting for Antoine** |
 
@@ -176,7 +176,7 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 
 ## Next steps (in order)
 1. **Antoine decides** (CORRECTIONS.md section 0): O-1 close PR #1 and abandon `about-endpoint`; O-2 delete
-   `app-ping-service` (needs `! gh auth refresh -h github.com -s delete_repo`); squash `ed12a15`+`c6fb938` or not;
+   `app-ping-service` (needs `! gh auth refresh -h github.com -s delete_repo`); 
    push Claudo's three local commits to `portable` (never `origin`) FIRST, then the factory commits to
    `AI-factory`; `judge_from = "mvp"`.
 2. V-1: re-run the same change from a snapshot of the fixed HEAD (~$2.4 for the app, ~$3 for the change). Expected:
