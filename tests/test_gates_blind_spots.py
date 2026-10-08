@@ -287,7 +287,7 @@ def test_checkpoint_blocks_are_not_tasks():
 def test_the_scope_check_feeds_the_plan_relint_loop(foreman):
     item = foreman.intake("X", "an api", "poc")
     result = foreman._lint(item, REAL_T2)
-    assert result is not None and any("app/main.py" in e for e in result.errors)
+    assert result is not None and any("app/main.py" in w for w in result.warnings) and result.ok
     assert (
         foreman._lint(item, "### T1 - ok\n- **files_touched :** `a.py`\n- **prompt :**\n  > Edit `a.py`.\n")
         is None
@@ -361,3 +361,62 @@ def test_a_key_seen_in_a_branch_commit_and_its_merge_is_reported_once(tmp_path):
     git(repo, "merge", "-q", "--no-ff", "-m", "merge", "side")
     hits = secrets_in_history(repo, f"{base}..HEAD")
     assert len(hits) == 1 and hits[0].endswith(":k.py: AWS access key")
+
+
+# ------------------------------------------------------------- J-6: the scope heuristic warns, never blocks
+
+
+def test_a_reference_after_that_or_defined_in_is_not_an_edit():
+    plan = (
+        "### T1 - Tests\n- **files_touched :** `tests/test_x.py`\n- **prompt :**\n"
+        "  > Add tests in `tests/test_x.py` that call the handler defined in `app/main.py`.\n"
+    )
+    assert plan_scope_errors(plan) == []
+
+
+def test_clause_boundaries_are_real_word_boundaries():
+    import factory.guard as guard
+
+    assert "\x08" not in Path(guard.__file__).read_text(encoding="utf-8")  # the corrupted regex, pinned
+    touched = "### T1 - X\n- **files_touched :** `tests/test_x.py`\n- **prompt :**\n  > "
+    # "and" splits clauses: the read-only first clause no longer borrows the second clause's verb
+    assert plan_scope_errors(touched + "Read `app/main.py` and update `tests/test_x.py`.\n") == []
+    # ...but never inside a word: "handlers" keeps its path whole
+    assert plan_scope_errors(touched + "Update `app/handlers.py` then run the tests.\n") == [
+        "T1: the prompt changes app/handlers.py but files_touched does not list it"
+    ]
+
+
+class AlwaysOutOfScope:
+    """A planner that keeps naming a file outside files_touched, whatever it is told."""
+
+    name = "claude"
+
+    def __init__(self):
+        self.prompts = []
+
+    def run(self, prompt, **kw):
+        from factory.agents import AgentResult
+        from tests.conftest import VALID_SPEC
+
+        self.prompts.append(prompt)
+        if "spec writer" in prompt:
+            return AgentResult(True, VALID_SPEC, 0.01)
+        plan = (
+            "---\ntype: tasks\nstatus: proposed\n---\n### T1 — Route\n- **depends_on :** []\n"
+            "- **files_touched :** `tests/test_x.py`\n- **prompt :**\n"
+            "  > Update `app/main.py` to add the route.\n"
+        )
+        return AgentResult(True, plan, 0.01)
+
+
+def test_scope_warnings_are_reprompted_then_shown_to_the_owner_without_blocking(foreman):
+    runner = AlwaysOutOfScope()
+    foreman.runner = runner
+    item = foreman.approve(foreman.run(foreman.intake("X", "an api", "poc")), "business")
+    assert (item.stage, item.status) == ("plan_review", "waiting")  # not blocked
+    plan_prompts = [p for p in runner.prompts if "planner of" in p]
+    assert len(plan_prompts) == 1 + foreman.cfg.plan_lint_retries  # re-prompted while retries remained
+    assert "files_touched does not list it" in plan_prompts[-1]
+    assert any(n.startswith("plan scope (heuristic):") and "app/main.py" in n for n in item.notes)
+    assert "app/main.py" in foreman.store.read(item, "plan-lint.md")

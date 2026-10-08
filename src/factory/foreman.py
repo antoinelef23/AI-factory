@@ -537,9 +537,12 @@ class Foreman:
             result = self.engine.lint_plan(
                 item.slug, spec=s.read(item, "spec.md"), design=s.read(item, "design.md"), tasks=tasks
             )
-        own_errors = plan_radar_errors(tasks, self.radar, item.maturity) + plan_scope_errors(tasks)
-        result.errors.extend(own_errors)
-        return None if self.engine is None and not own_errors else result
+        radar_errors = plan_radar_errors(tasks, self.radar, item.maturity)
+        result.errors.extend(radar_errors)
+        # The scope check is a heuristic: it feeds the re-prompt and warns the owner, it never blocks a plan.
+        scope = plan_scope_errors(tasks)
+        result.warnings.extend(scope)
+        return None if self.engine is None and not radar_errors and not scope else result
 
     def _do_plan(self, item: WorkItem) -> tuple[bool, str]:
         """Write tasks.md. With Claudo available the plan must pass ITS plan-lint before a human sees
@@ -565,21 +568,31 @@ class Foreman:
                 if not ok:
                     return False, text
             lint = self._lint(item, text)
-            if lint is None or lint.ok:
+            scope = [w for w in lint.warnings if "files_touched does not list it" in w] if lint else []
+            if lint is None or (lint.ok and not scope):
                 break
+            if lint.ok and (self.runner is None or tries >= self.cfg.plan_lint_retries):
+                break  # only scope warnings left: the owner sees them at plan review, nothing blocks
             if self.runner is None or tries >= self.cfg.plan_lint_retries:
                 self.store.write(item, "tasks.md", text)  # keep it for the human to inspect
                 where = "offline template" if self.runner is None else f"{tries + 1} attempt(s)"
                 return False, f"plan rejected by Claudo plan-lint ({where}):\n{lint.feedback()}"
             tries += 1
-            item.log("lint", f"plan-lint: {len(lint.errors)} error(s), re-prompting ({tries})")
+            item.log(
+                "lint",
+                f"plan-lint: {len(lint.errors)} error(s), {len(scope)} scope warning(s), "
+                f"re-prompting ({tries})",
+            )
             feedback = (
                 f"{item.feedback}\nYour previous tasks.md FAILED Claudo's plan-lint. Fix every error:\n"
                 f"{lint.feedback()}\n\nYour previous tasks.md was:\n{text}"
             )
         self.store.write(item, "tasks.md", with_run_log(text))
+        item.notes = [n for n in item.notes if not n.startswith("plan scope (heuristic):")]
         if lint is not None:
             self.store.write(item, "plan-lint.md", f"# Claudo plan-lint\n\n{lint.feedback() or 'clean'}\n")
+            for warning in (w for w in lint.warnings if "files_touched does not list it" in w):
+                item.notes.append(f"plan scope (heuristic): {warning}")
         self.judge_artifact(item, "plan")
         mode = "offline template" if self.runner is None else f"agent, {tries} lint retries"
         return True, f"tasks.md written ({mode})" + (", plan-lint ok" if lint is not None else "")

@@ -65,7 +65,10 @@ REPO_PATH = re.compile(r"`([\w./-]+\.(?:py|toml|md|txt|json|ya?ml|cfg|ini|js|ts|
 FILES_TOUCHED = re.compile(r"^\s*-\s*\*\*files_touched\s*:\s*\*\*\s*(.*)$", re.I)
 PROMPT_MARK = re.compile(r"^\s*-\s*\*\*prompt\s*:\s*\*\*", re.I)
 SENTENCE = re.compile(r"(?<=[.!?])\s+")
-CLAUSE = re.compile(r"[;,:]|(?:then|and|but)", re.I)
+# Clause boundaries. A relative or reference marker also ends the clause that carries the verb: "add tests in
+# `a.py` that call `b.py`" edits a.py only. (This line once held literal backspace bytes instead of \b, so the
+# word alternation never matched: test_clause_boundaries_are_real_word_boundaries pins it.)
+CLAUSE = re.compile(r"[;,:]|\b(?:then|and|but|that|which|calling|called|defined|declared|imported)\b", re.I)
 
 
 def _in_scope(path: str, touched: list[str]) -> bool:
