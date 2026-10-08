@@ -985,6 +985,23 @@ class Foreman:
         target.approved_head = tip
         self.store.save(target)
 
+    @staticmethod
+    def _read_ci(item: WorkItem, host: GitHost) -> None:
+        """The company CI on the pull request, read back (ROADMAP P2-4). Logged when it changes."""
+        checks = host.pull_request_checks(item.pr_url)
+        failed = [name for name, bucket in checks if bucket in ("fail", "cancel")]
+        if not checks:
+            state = "none"
+        elif failed:
+            state = "fail"
+        elif any(bucket == "pending" for _, bucket in checks):
+            state = "pending"
+        else:
+            state = "pass"
+        if (state, failed) != (item.ci_state, item.ci_failed):
+            item.log("ci", state + (f": {', '.join(failed)}" if failed else ""))
+        item.ci_state, item.ci_failed = state, failed
+
     def sync(self, item: WorkItem) -> WorkItem:
         """Read the pull request's state; once IT merged it on the host, fast-forward the local app to it."""
         host = self._host()
@@ -995,11 +1012,14 @@ class Foreman:
         try:
             state = host.pull_request_state(item.pr_url)
             previous, item.pr_state = item.pr_state, state
+            self._read_ci(item, host)
             if state == "MERGED" and not item.merged:
                 tip = sync_merged_base(self.app_dir(item), item.slug, item.base_branch or "main")
                 item.merged = True
                 self._move_target_head(item, tip)
                 item.log("merged", f"on the host; {item.base_branch} is now at {tip[:8]}")
+                if item.ci_state == "fail":  # the factory never blocks a merge; it records this one
+                    item.log("merged_over_red_ci", f"merged while CI failed: {', '.join(item.ci_failed)}")
             elif state == "CLOSED" and previous != "CLOSED":
                 item.log("closed", "the pull request was closed without merging")
         except (DeliveryError, ProjectError) as e:

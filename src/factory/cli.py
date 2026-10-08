@@ -43,6 +43,9 @@ def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
         print(f"  repo  : {item.repo} (private)")
     if item.pr_url:
         print(f"  pr    : {item.pr_url} ({item.pr_state or 'OPEN'})")
+    if item.ci_state:
+        failing = f" ({', '.join(item.ci_failed)})" if item.ci_failed else ""
+        print(f"  ci    : {item.ci_state}{failing}")
     if item.kind != "app":
         state = "merged" if item.merged else ("abandoned" if item.status == "abandoned" else "not merged yet")
         print(f"  change: {item.kind} of {item.target}, branch factory/{item.slug} ({state})")
@@ -148,6 +151,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print("`factory drift` will judge it.")
     else:
         print(f"{item.slug}: pull request {item.pr_state} ({item.pr_url})")
+    if item.ci_state:
+        failing = f": {', '.join(item.ci_failed)}" if item.ci_failed else ""
+        print(f"  CI: {item.ci_state}{failing}")
     return 0
 
 

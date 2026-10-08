@@ -39,6 +39,11 @@ class GitHost(Protocol):
         """Close an open pull request (and delete its branch) without merging it."""
         ...
 
+    def pull_request_checks(self, url: str) -> list[tuple[str, str]]:
+        """(name, bucket) of each CI check of the pull request, bucket being one of pass | fail | pending |
+        skipping | cancel. An empty list means the repository runs no CI on it."""
+        ...
+
 
 class GhCli:
     """GitHub through the `gh` CLI (already authenticated on this machine)."""
@@ -47,6 +52,12 @@ class GhCli:
         self.executable = executable
 
     def _run(self, *args: str, input_text: str | None = None) -> str:
+        rc, out, err = self._exec(*args, input_text=input_text)
+        if rc != 0:
+            raise DeliveryError(f"gh {' '.join(args[:2])} failed: {(err or out).strip()[-400:]}")
+        return out.strip()
+
+    def _exec(self, *args: str, input_text: str | None = None) -> tuple[int, str, str]:
         try:
             p = subprocess.run(
                 [self.executable, *args],
@@ -61,9 +72,7 @@ class GhCli:
             raise DeliveryError("the GitHub CLI `gh` is not installed or not on PATH") from e
         except subprocess.TimeoutExpired as e:
             raise DeliveryError(f"gh {' '.join(args[:2])} timed out") from e
-        if p.returncode != 0:
-            raise DeliveryError(f"gh {' '.join(args[:2])} failed: {(p.stderr or p.stdout).strip()[-400:]}")
-        return p.stdout.strip()
+        return p.returncode, p.stdout or "", p.stderr or ""
 
     def owner(self) -> str:
         return self._run("api", "user", "-q", ".login")
@@ -93,3 +102,17 @@ class GhCli:
 
     def close_pull_request(self, url: str, comment: str) -> None:
         self._run("pr", "close", url, "--comment", comment, "--delete-branch")
+
+    def pull_request_checks(self, url: str) -> list[tuple[str, str]]:
+        # `gh pr checks` exits non-zero when a check failed (1) or is pending (8): the JSON is the answer.
+        rc, out, err = self._exec("pr", "checks", url, "--json", "name,bucket")
+        if out.strip():
+            try:
+                return [(str(c["name"]), str(c["bucket"])) for c in json.loads(out)]
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                raise DeliveryError(f"gh pr checks: unreadable answer: {out.strip()[:200]}") from e
+        if "no checks reported" in err.lower():
+            return []
+        if rc != 0:
+            raise DeliveryError(f"gh pr checks failed: {(err or out).strip()[-400:]}")
+        return []

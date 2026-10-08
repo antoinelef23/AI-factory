@@ -68,6 +68,8 @@ class WorkItem:
     repo_url: str = ""  # the remote the app pushes to
     pr_url: str = ""  # the pull request opened for a change
     pr_state: str = ""  # OPEN | MERGED | CLOSED, as last seen by `factory sync`
+    ci_state: str = ""  # the pull request's CI, as last seen by `factory sync`: pass | fail | pending | none
+    ci_failed: list[str] = field(default_factory=list)  # names of the failing (or cancelled) checks
     created: str = field(default_factory=now)
     stage: str = "triage"
     status: str = "active"  # active | waiting | blocked | shipped

@@ -20,6 +20,7 @@ class FakeHost:
     def __init__(self, base, existing=()):
         self.base, self.existing = base, set(existing)
         self.created, self.prs, self.closed, self.state = [], [], [], "OPEN"
+        self.checks = []  # (name, bucket) of the pull request's CI
 
     def owner(self):
         return "acme"
@@ -40,6 +41,9 @@ class FakeHost:
 
     def pull_request_state(self, url):
         return self.state
+
+    def pull_request_checks(self, url):
+        return list(self.checks)
 
     def close_pull_request(self, url, comment):
         pr = self.prs[int(url.rsplit("/", 1)[1]) - 1]
@@ -651,3 +655,86 @@ def test_abandon_with_a_dirty_tree_closes_nothing_on_the_host(hosted, tmp_path):
     with pytest.raises(FactoryError, match="uncommitted changes"):
         hosted.abandon(ch, "owner", "no longer needed")
     assert hosted.host.closed == [] and hosted.store.load(ch.slug).status != "abandoned"
+
+
+# ------------------------------------------------------------- P2-4: the company CI on the pull request
+
+
+def published_change(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    return app, hosted.publish(ch, "it")
+
+
+@pytest.mark.parametrize(
+    ("checks", "state", "failed"),
+    [
+        ([], "none", []),
+        ([("tests", "pass"), ("lint", "skipping")], "pass", []),
+        ([("tests", "pass"), ("lint", "pending")], "pending", []),
+        ([("tests", "fail"), ("lint", "pass"), ("deploy", "cancel")], "fail", ["tests", "deploy"]),
+    ],
+)
+def test_sync_reads_the_pull_requests_ci_back(hosted, tmp_path, checks, state, failed):
+    _, ch = published_change(hosted, tmp_path)
+    hosted.host.checks = checks
+    ch = hosted.sync(ch)
+    assert (ch.ci_state, ch.ci_failed) == (state, failed)
+    assert hosted.store.load(ch.slug).ci_state == state
+
+
+def test_a_ci_change_is_logged_once(hosted, tmp_path):
+    _, ch = published_change(hosted, tmp_path)
+    hosted.host.checks = [("tests", "pending")]
+    hosted.sync(ch)
+    hosted.sync(ch)
+    hosted.host.checks = [("tests", "pass")]
+    ch = hosted.sync(ch)
+    assert [h["detail"] for h in ch.history if h["event"] == "ci"] == ["pending", "pass"]
+
+
+def test_a_merge_over_failing_ci_is_recorded_not_blocked(hosted, tmp_path):
+    app, ch = published_change(hosted, tmp_path)
+    hosted.host.checks = [("tests", "fail")]
+    hosted.host.merge_on_host(f"app-{app.slug}", f"factory/{ch.slug}")
+    ch = hosted.sync(ch)
+    assert ch.merged  # IT merged on the host: the factory never blocks that
+    events = [h for h in ch.history if h["event"] == "merged_over_red_ci"]
+    assert len(events) == 1 and "tests" in events[0]["detail"]
+
+
+def test_show_and_sync_print_the_ci_state(hosted, tmp_path, capsys):
+    from factory.cli import _print_item
+
+    _, ch = published_change(hosted, tmp_path)
+    hosted.host.checks = [("tests", "fail"), ("lint", "pass")]
+    ch = hosted.sync(ch)
+    _print_item(hosted, ch)
+    assert "ci    : fail (tests)" in capsys.readouterr().out
+
+
+def gh_answer(monkeypatch, rc, out, err=""):
+    monkeypatch.setattr(
+        delivery.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=rc, stdout=out, stderr=err)
+    )
+
+
+def test_gh_reads_checks_even_when_it_exits_non_zero_for_a_failure(monkeypatch):
+    gh_answer(monkeypatch, 1, '[{"name": "tests", "bucket": "fail"}, {"name": "lint", "bucket": "pass"}]')
+    assert GhCli().pull_request_checks("https://github.com/a/b/pull/1") == [
+        ("tests", "fail"),
+        ("lint", "pass"),
+    ]
+    gh_answer(monkeypatch, 8, '[{"name": "tests", "bucket": "pending"}]')  # 8 = pending
+    assert GhCli().pull_request_checks("u") == [("tests", "pending")]
+
+
+def test_gh_no_checks_is_an_empty_list_and_a_real_failure_is_an_error(monkeypatch):
+    gh_answer(monkeypatch, 1, "", "no checks reported on the 'factory/x' branch")
+    assert GhCli().pull_request_checks("u") == []
+    gh_answer(monkeypatch, 1, "", "HTTP 401: Bad credentials")
+    with pytest.raises(DeliveryError, match="401"):
+        GhCli().pull_request_checks("u")
+    gh_answer(monkeypatch, 0, "not json")
+    with pytest.raises(DeliveryError, match="unreadable"):
+        GhCli().pull_request_checks("u")
