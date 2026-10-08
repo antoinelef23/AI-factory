@@ -1,4 +1,5 @@
-"""Import a company's existing tech radar (CSV or JSON, Thoughtworks BYOR style) into radar.toml.
+"""Import a company's existing tech radar into radar.toml: a spreadsheet (CSV, Thoughtworks BYOR style),
+a BYOR JSON list, or the JSON of Backstage's tech-radar plugin (`quadrants`, `rings`, timed `entries`).
 
 Companies keep their radar in a spreadsheet, not in TOML. What they usually DON'T have is a capability
 category per technology ("backend", "database"), which the design compiler needs to pick a stack: the
@@ -35,6 +36,11 @@ QUADRANT_CATEGORY = {
     "platforms": "platform",
     "languages & frameworks": "framework",
     "languages and frameworks": "framework",
+    # Backstage's default quadrants
+    "infrastructure": "platform",
+    "frameworks": "framework",
+    "languages": "language",
+    "process": "technique",
 }
 COLUMN_ALIASES = {
     "name": ("name", "nom", "technology", "technologie", "blip"),
@@ -70,10 +76,54 @@ def _sniff(text: str) -> str:
     return best if header.count(best) else ","
 
 
+def _is_backstage(data: object) -> bool:
+    return (
+        isinstance(data, dict)
+        and isinstance(data.get("entries"), list)
+        and ("rings" in data or "quadrants" in data)
+    )
+
+
+def _backstage_rows(data: dict) -> list[dict[str, str]]:
+    """Backstage tech-radar JSON (TechRadarLoaderResponse) as importer rows.
+
+    An entry's ring is its MOST RECENT timeline move (by date; the first move when dates are missing).
+    Ring and quadrant ids are the company's own: they are resolved through `rings` / `quadrants` to their
+    names, and the ring name then goes through the usual aliases (ADOPT, Trial, ...)."""
+    rings = {str(r.get("id", "")).strip(): str(r.get("name", "")).strip() for r in data.get("rings", [])}
+    quadrants = {
+        str(q.get("id", "")).strip(): str(q.get("name", "")).strip() for q in data.get("quadrants", [])
+    }
+    rows: list[dict[str, str]] = []
+    for entry in data["entries"]:
+        timeline = [t for t in entry.get("timeline") or [] if isinstance(t, dict)]
+        dated = [t for t in timeline if t.get("date")]
+        current = max(dated, key=lambda t: str(t["date"])) if dated else (timeline[0] if timeline else {})
+        ring_id = str(current.get("ringId", entry.get("ring", ""))).strip()
+        ring = ring_id if ring_id.lower() in RING_ALIASES else rings.get(ring_id, ring_id)
+        quadrant_id = str(entry.get("quadrant", "")).strip()
+        name = str(entry.get("title") or entry.get("id") or "").strip()
+        key = str(entry.get("key") or entry.get("id") or "").strip()
+        rows.append(
+            {
+                "name": name,
+                "ring": ring,
+                "quadrant": quadrants.get(quadrant_id, quadrant_id),
+                # optional fields a company may add to its entries; standard Backstage has none of them
+                "category": str(entry.get("category", "")).strip(),
+                "replaced_by": str(entry.get("replacedBy") or entry.get("replaced_by") or "").strip(),
+                "match": key if key and key.lower() != name.lower() else "",
+            }
+        )
+    return rows
+
+
 def _rows(text: str, source: str) -> tuple[list[dict[str, str]], list[str]]:
     text = text.lstrip("﻿")  # Excel's UTF-8 BOM
     if source.lower().endswith(".json"):
         data = json.loads(text)
+        if _is_backstage(data):
+            return _backstage_rows(data), []
         if isinstance(data, dict):
             data = data.get("blips") or data.get("technologies") or data.get("tech") or []
         return [{str(k).strip().lower(): str(v).strip() for k, v in row.items()} for row in data], []

@@ -152,6 +152,11 @@ French: Adopter / Essayer / Évaluer / Suspendre). It never overwrites your rada
 what an export cannot know: each technology's **capability category** (backend, database, ...), which the design
 compiler needs to *choose* a stack. Add a `category` column (and `replaced_by` for hold technologies) for full effect.
 
+It also reads the JSON of **Backstage's tech-radar plugin** (`quadrants`, `rings`, `entries`):
+`uv run factory radar-import tech-radar.json`. Each entry's ring is its most recent timeline move; your own ring and
+quadrant ids are resolved through their names; an entry's `key` becomes an alias. Backstage has no capability
+category either: add `category` (and `replacedBy` for hold entries) to your entries, or fill them in afterwards.
+
 ## When IT changes the radar: diff and drift
 
 ```powershell

@@ -454,7 +454,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("radar", help="show the company tech radar").set_defaults(func=cmd_radar)
 
     sp = sub.add_parser(
-        "radar-import", help="IT: convert a CSV/JSON radar export (Thoughtworks BYOR style) to radar.toml"
+        "radar-import",
+        help="IT: convert a radar export (BYOR CSV/JSON, Backstage tech-radar JSON) to radar.toml",
     )
     sp.add_argument("source", help="the export (.csv or .json); needs a name and a ring column")
     sp.add_argument("--out", help="where to write (default: radar.imported.toml next to factory.toml)")

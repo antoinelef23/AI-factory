@@ -188,3 +188,112 @@ def test_an_imported_radar_drives_a_whole_factory_item(cli_env, tmp_path):
     assert main(["run", "notes"]) == 0
     state = json.loads((cli_env / "work" / "notes" / "item.json").read_text(encoding="utf-8"))
     assert any("Flask" in n and "FastAPI" in n for n in state["notes"])  # the imported rules, applied
+
+
+# ------------------------------------------------------------ Backstage tech-radar plugin JSON (ROADMAP P3-1)
+
+# The shape of Backstage's TechRadarLoaderResponse, with company-specific ring ids (not the ring names).
+BACKSTAGE = {
+    "title": "Acme Tech Radar",
+    "quadrants": [
+        {"id": "infrastructure", "name": "Infrastructure"},
+        {"id": "frameworks", "name": "Frameworks"},
+        {"id": "languages", "name": "Languages"},
+        {"id": "process", "name": "Process"},
+    ],
+    "rings": [
+        {"id": "r-adopt", "name": "ADOPT", "color": "#5BA300"},
+        {"id": "r-trial", "name": "TRIAL", "color": "#009EB0"},
+        {"id": "r-assess", "name": "ASSESS", "color": "#C7BA00"},
+        {"id": "r-hold", "name": "HOLD", "color": "#E09B96"},
+    ],
+    "entries": [
+        {
+            "id": "fastapi",
+            "title": "FastAPI",
+            "key": "fastapi",
+            "quadrant": "frameworks",
+            "timeline": [{"moved": 0, "ringId": "r-adopt", "date": "2024-01-10T00:00:00.000Z"}],
+        },
+        {
+            "id": "flask",
+            "title": "Flask",
+            "key": "flask",
+            "quadrant": "frameworks",
+            "replacedBy": "FastAPI",
+            "timeline": [  # the newest move wins, whatever the order of the list
+                {"moved": -1, "ringId": "r-hold", "date": "2025-06-01T00:00:00.000Z"},
+                {"moved": 0, "ringId": "r-adopt", "date": "2021-03-01T00:00:00.000Z"},
+            ],
+        },
+        {
+            "id": "pg",
+            "title": "PostgreSQL",
+            "key": "postgres",
+            "quadrant": "infrastructure",
+            "category": "database",
+            "timeline": [{"moved": 0, "ringId": "r-trial", "date": "2023-05-05T00:00:00.000Z"}],
+        },
+        {
+            "id": "python",
+            "title": "Python",
+            "quadrant": "languages",
+            "timeline": [{"ringId": "ADOPT"}],  # a ring given by name, no date
+        },
+    ],
+}
+
+
+def test_a_backstage_radar_becomes_a_radar_the_factory_loads(tmp_path):
+    res = import_radar(json.dumps(BACKSTAGE), source="tech-radar.json", company="Acme")
+    assert res.ok, res.problems
+    radar = loaded(res, tmp_path)
+    rings = {t.id: t.ring for t in radar.techs}
+    assert rings == {"fastapi": "adopt", "flask": "hold", "postgresql": "trial", "python": "adopt"}
+    assert res.counts == {"adopt": 2, "trial": 1, "assess": 0, "hold": 1}
+
+
+def test_backstage_ring_ids_resolve_through_their_names_and_the_newest_move_wins(tmp_path):
+    radar = loaded(import_radar(json.dumps(BACKSTAGE), source="r.json"), tmp_path)
+    flask = radar.get("flask")
+    assert flask.ring == "hold" and flask.replaced_by == "fastapi"  # 2025 hold beats 2021 adopt
+    assert verdict(flask, "poc") == "block"
+
+
+def test_backstage_quadrants_are_hints_keys_are_aliases_and_categories_are_kept(tmp_path):
+    res = import_radar(json.dumps(BACKSTAGE), source="r.json")
+    radar = loaded(res, tmp_path)
+    assert radar.get("fastapi").category == "framework"  # quadrant hint only
+    assert radar.get("python").category == "language"
+    pg = radar.get("postgresql")
+    assert pg.category == "database" and "postgres" in pg.match  # explicit category, key as alias
+    assert radar.find("postgres") is pg
+    assert res.needs_category == ["fastapi", "flask", "python"]  # honest: only PostgreSQL had one
+
+
+def test_a_backstage_entry_with_an_unknown_ring_is_refused_with_its_position():
+    data = json.loads(json.dumps(BACKSTAGE))
+    data["entries"][2]["timeline"] = [{"ringId": "r-mystery", "date": "2024-01-01"}]
+    res = import_radar(json.dumps(data), source="r.json")
+    assert not res.ok and any("line 4" in p and "PostgreSQL" in p and "r-mystery" in p for p in res.problems)
+
+
+def test_a_backstage_replacement_that_is_not_on_the_radar_is_refused():
+    data = json.loads(json.dumps(BACKSTAGE))
+    data["entries"][1]["replacedBy"] = "Quart"
+    res = import_radar(json.dumps(data), source="r.json")
+    assert not res.ok and any("replaced_by 'quart' is not on the radar" in p for p in res.problems)
+
+
+def test_a_plain_json_blip_list_is_not_mistaken_for_backstage(tmp_path):
+    data = {"entries": [{"name": "Kafka", "ring": "Trial"}]}  # no rings/quadrants: not Backstage
+    res = import_radar(json.dumps({"blips": data["entries"]}), source="r.json")
+    assert res.ok and [t.id for t in loaded(res, tmp_path).techs] == ["kafka"]
+
+
+def test_cli_imports_a_backstage_file(cli_env, tmp_path, capsys):
+    src = tmp_path / "tech-radar.json"
+    src.write_text(json.dumps(BACKSTAGE), encoding="utf-8")
+    out = cli_env / "radar.imported.toml"
+    assert main(["radar-import", str(src), "--company", "Acme", "--version", "2026.10"]) == 0
+    assert out.is_file() and load_radar(out).get("flask").ring == "hold"
