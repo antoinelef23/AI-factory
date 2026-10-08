@@ -79,3 +79,35 @@ def test_cli_judge_command(factory_root, capsys, monkeypatch):
     assert cli.main(["show", "x"]) == 0
     assert "judge spec: pass" in capsys.readouterr().out
     assert cli.main(["judge", "x", "--kind", "build"]) == 2  # nothing built yet
+
+
+# ------------------------------------------------------------ judge_from: judge from a maturity up
+
+
+def test_judge_from_judges_items_at_that_maturity_and_above_only(foreman):
+    from factory.workitem import WorkItem
+
+    foreman.cfg.judge_enabled, foreman.cfg.judge_from = False, "mvp"
+    make = lambda m: WorkItem(slug="x", title="x", idea="x", maturity=m)  # noqa: E731
+    assert [foreman._judge_on(make(m)) for m in ("pov", "poc", "mvp", "prod")] == [False, False, True, True]
+
+
+def test_judge_true_still_judges_everything_and_empty_judge_from_means_off(foreman):
+    from factory.workitem import WorkItem
+
+    item = WorkItem(slug="x", title="x", idea="x", maturity="pov")
+    foreman.cfg.judge_enabled, foreman.cfg.judge_from = True, ""
+    assert foreman._judge_on(item)
+    foreman.cfg.judge_enabled = False
+    assert not foreman._judge_on(item)
+
+
+def test_judge_from_must_be_a_maturity(factory_root):
+    from factory.config import ConfigError, load_config
+
+    toml = factory_root / "factory.toml"
+    toml.write_text(
+        toml.read_text(encoding="utf-8").replace('judge_from = ""', 'judge_from = "soon"'), encoding="utf-8"
+    )
+    with pytest.raises(ConfigError, match="judge_from"):
+        load_config(factory_root)

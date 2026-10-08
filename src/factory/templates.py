@@ -146,7 +146,9 @@ without numbers; realistic examples; explicit non-goals; one eval per BHV/INV: e
 appear in the Covers column of at least one EVAL row, and each ID is defined exactly once.
 Always include BHV-1 = `GET /health` returns 200 {{"status": "ok"}} and
 INV-1 = only technologies allowed by the company tech radar at maturity `{item.maturity}`.
-Do not choose technologies: that is the design's job.{fb}
+Do not choose technologies: that is the design's job.
+Every BHV must be something idea.md asks for: add no edge-case behaviour (trailing slashes, near-miss
+paths, extra HTTP methods, extra headers) that the idea does not request.{fb}
 Output ONLY the markdown of spec.md (frontmatter first: type: spec, feature: {item.slug},
 version: 0.1.0, status: draft), no commentary, no code fence.
 
@@ -355,7 +357,11 @@ numbers; realistic examples; explicit non-goals; one eval per BHV/INV: every INV
 in the Covers column of at least one EVAL row, and each ID is defined exactly once. Always include
 INV-1 = only technologies allowed by the company tech radar at maturity `{item.maturity}`,
 INV-3 = existing behavior does not change except as the spec states and the existing tests stay green, and
-BHV-1 = no regression (the existing test suite still passes). Do not choose technologies.{fb}
+BHV-1 = no regression (the existing test suite still passes). Do not choose technologies.
+Every BHV must be something idea.md asks for: add no edge-case behaviour (trailing slashes, near-miss
+paths, extra HTTP methods, extra headers) that the idea does not request. When the idea says existing
+behaviour must not change, every BHV must hold with the framework's DEFAULT behaviour: a BHV that could
+only pass by reconfiguring the app globally contradicts INV-3.{fb}
 Output ONLY the markdown of spec.md (frontmatter first: type: spec, feature: {item.slug},
 version: 0.1.0, status: draft), no commentary, no code fence.
 

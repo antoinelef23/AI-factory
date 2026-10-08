@@ -621,12 +621,19 @@ class Foreman:
         ctx = f"\nSPEC the code must satisfy:\n<spec>\n{self.store.read(item, 'spec.md')}\n</spec>\n"
         return "\n\n".join(parts), ctx
 
+    def _judge_on(self, item: WorkItem) -> bool:
+        """`judge = true` judges everything; `judge_from = "mvp"` judges items at that maturity and above."""
+        if self.cfg.judge_enabled:
+            return True
+        floor = self.cfg.judge_from
+        return bool(floor) and MATURITIES.index(item.maturity) >= MATURITIES.index(floor)
+
     def judge_artifact(self, item: WorkItem, kind: str, force: bool = False):
         """Run the LLM judge on an artifact. Never blocks: it is advice for the reviewer.
 
         Only with an agent runner and `[agent] judge = true` (billed), unless `force`
         (explicit `factory judge`)."""
-        if self.runner is None or not (force or self.cfg.judge_enabled):
+        if self.runner is None or not (force or self._judge_on(item)):
             return None
         artifact, extra = self._judge_inputs(item, kind)
         if not artifact.strip():

@@ -12,6 +12,9 @@ golden_paths_dir = "golden_paths" # IT-approved project templates
 runner = "offline"                # offline (templates, free) | claude (Claude Code CLI, billed)
 max_turns_build = 40
 judge = false                     # LLM-as-judge on spec/plan/build (advisory, billed, agent runners only)
+# judge_from = "mvp" would judge every spec/plan/build from MVP up without turning the judge on for POV/POC
+# (about $0.05-0.17 per judged artifact). Empty = off: it is a spending decision, so it stays yours.
+judge_from = ""
 # judge_thinking_tokens: unset = model default. Measured on one real spec (haiku): default thinking ~$0.08 and
 # caught invented requirements; budget 3000 ~$0.05; budget 0 ~$0.02 but MISSED them (fidelity 5). Cheap judging
 # is a false economy, so leave it unset unless you re-run the calibration.

@@ -47,6 +47,7 @@ class Config:
     claudo_timeout: int = 3600  # [engine] build_timeout: seconds per orchestrator run
     claudo_budget_usd: float = 0.0  # [engine] budget_usd: per-run spend cap passed to Claudo (0 = none)
     judge_enabled: bool = False
+    judge_from: str = ""  # [agent] judge_from: judge automatically from this maturity up ("" = off)
     judge_thinking_tokens: int | None = None  # None = model default (expensive); 0 disables thinking
     models: dict[str, str] = field(default_factory=dict)
     gates: dict[str, list[str]] = field(default_factory=lambda: dict(DEFAULT_GATES))
@@ -91,6 +92,7 @@ def load_config(root: Path) -> Config:
         max_turns_build=int(agent.get("max_turns_build", 40)),
         max_build_attempts=max(1, int(agent.get("max_build_attempts", 3))),
         judge_enabled=bool(agent.get("judge", False)),
+        judge_from=str(agent.get("judge_from", "")),
         judge_thinking_tokens=agent.get("judge_thinking_tokens"),
         claudo_home=data.get("engine", {}).get("claudo") or None,
         plan_lint_retries=max(0, int(data.get("engine", {}).get("plan_lint_retries", 2))),
@@ -108,6 +110,10 @@ def load_config(root: Path) -> Config:
     for maturity in DEFAULT_GATES:
         if maturity in gates:
             cfg.gates[maturity] = list(gates[maturity])
+    if cfg.judge_from and cfg.judge_from not in DEFAULT_GATES:
+        raise ConfigError(
+            f"{path}: [agent] judge_from = {cfg.judge_from!r}, expected '' or one of {sorted(DEFAULT_GATES)}"
+        )
     if cfg.delivery_provider not in ("none", "github"):
         raise ConfigError(
             f"{path}: [delivery] provider = {cfg.delivery_provider!r}, expected 'none' or 'github'"

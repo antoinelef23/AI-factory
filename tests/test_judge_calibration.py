@@ -144,3 +144,32 @@ def test_the_judge_notices_degraded_specs(capsys):
         f"the good spec must not be failed or unreliable: {base.verdict}"
     )
     assert not missed, f"the {model} judge did not notice: {missed}"
+
+
+# ---------------------------------------------------------- live regression: a spec that invented BHV-4
+
+ABOUT = Path(__file__).resolve().parents[1] / "evals" / "judge_calibration" / "about-endpoint"
+ABOUT_SPEC = (ABOUT / "spec.md").read_text(encoding="utf-8")
+ABOUT_IDEA = (ABOUT / "idea.md").read_text(encoding="utf-8").split("## What the business wants")[1].strip()
+
+
+def test_the_about_fixture_is_the_spec_that_invented_an_edge_case():
+    """Free: BHV-4 (trailing slash / near-miss paths) is in the spec, absent from the idea, and what forced
+    `redirect_slashes=False` on existing endpoints against INV-3."""
+    assert "BHV-4" in ABOUT_SPEC and "GET /about/" in ABOUT_SPEC
+    assert "/about/" not in ABOUT_IDEA and "trailing" not in ABOUT_IDEA.lower()
+    assert "Do not change any existing endpoint" in ABOUT_IDEA and "INV-3" in ABOUT_SPEC
+
+
+@pytest.mark.live
+def test_the_judge_notices_an_edge_case_the_idea_never_asked_for(capsys):
+    """Opt-in (billed, about $0.05-0.17). The judge must not wave this spec through on fidelity or scope."""
+    model = os.environ.get("JUDGE_MODEL", "sonnet")
+    rep = judge(ClaudeRunner(), "spec", ABOUT_SPEC, ABOUT_IDEA, model=model, cwd=ABOUT)
+    scores = grounded_scores(rep)
+    with capsys.disabled():
+        print(f"\nabout-endpoint {rep.verdict} {rep.average:.2f} {scores} cost ${rep.cost_usd:.2f}")
+    assert rep.verdict != "unreliable"
+    assert min(scores.get("fidelity", 5), scores.get("scope", 5)) <= 3 or rep.verdict == "revise", (
+        f"the {model} judge let an invented requirement through: {scores}"
+    )

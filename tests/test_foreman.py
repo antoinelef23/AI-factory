@@ -167,3 +167,17 @@ def test_claude_runner_path_uses_agent_output(foreman):
     assert foreman.store.read(item, "spec.md") == VALID_SPEC.strip() + "\n"  # the code fence was unwrapped
     assert item.cost_usd == pytest.approx(0.05)
     assert "maturity `poc`" in foreman.runner.prompts[0][0]
+
+
+# ------------------------------------------------------------ spec prompts: no invented edge cases (S-1)
+
+
+def test_both_spec_prompts_forbid_edge_cases_the_idea_did_not_ask_for():
+    from factory.templates import change_spec_prompt, spec_prompt
+    from factory.workitem import WorkItem
+
+    item = WorkItem(slug="x", title="x", idea="x", maturity="mvp", kind="feature", target="app")
+    new, change = spec_prompt(item, ""), change_spec_prompt(item, "", "")
+    for prompt in (new, change):
+        assert "Every BHV must be something idea.md asks for" in prompt and "trailing slashes" in prompt
+    assert "framework's DEFAULT behaviour" in change and "contradicts INV-3" in change
