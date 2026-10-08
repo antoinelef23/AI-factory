@@ -63,6 +63,8 @@ def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
     if item.claudo_review:
         r = item.claudo_review
         print(f"  Claudo reviewer {r['cp']}: {r['verdict']}  apps/{item.slug}/{r['report']}")
+    for ack in item.ship_acks:
+        print(f"  needs IT: {ack['kind']}: {ack['detail']}")
     for kind, j in item.judgements.items():
         print(
             f"  judge {kind}: {j['verdict']} ({j['average']}/5, advisory)  work/{item.slug}/judge-{kind}.md"

@@ -47,6 +47,7 @@ from factory.project import (
     begin_change,
     commit_all,
     commit_leftovers,
+    commit_leftovers_split,
     current_branch,
     merge_fast_forward,
     porcelain,
@@ -244,18 +245,21 @@ class Foreman:
             self._record_hash(item, "design.md")
         if item.stage == "plan_review":
             self._mark_plan_approved(item, by)
-        if (
-            item.stage == "ship_review"
-            and item.claudo_review.get("verdict") not in (None, "PASS")
-            and not note.strip()
-        ):
-            # The human decides, but not blind: shipping over the reviewer's objection must be justified, and
-            # the justification is recorded with the approval.
-            raise FactoryError(
-                f"Claudo's reviewer said {item.claudo_review['verdict']} "
-                f"(see apps/{item.slug}/{item.claudo_review['report']}): to ship anyway, approve with "
-                '--note "why this is acceptable"; or reject with --reason to have it reworked'
-            )
+        if item.stage == "ship_review" and not note.strip():
+            # The human decides, but not blind: shipping over the reviewer's objection, or over something the
+            # factory had to flag, must be justified, and the justification is recorded with the approval.
+            reasons = []
+            if item.claudo_review.get("verdict") not in (None, "PASS"):
+                reasons.append(
+                    f"Claudo's reviewer said {item.claudo_review['verdict']} "
+                    f"(see apps/{item.slug}/{item.claudo_review['report']})"
+                )
+            reasons += [f"{a['kind']}: {a['detail']}" for a in item.ship_acks]
+            if reasons:
+                raise FactoryError(
+                    "; ".join(reasons) + ': to ship anyway, approve with --note "why this is acceptable"; '
+                    "or reject with --reason to have it reworked"
+                )
         if item.stage == "ship_review" and item.claudo_cp:
             ok, detail = self._finalize_with_claudo(item, by or role)
             if not ok:  # signing or the final orchestrator run failed: nothing ships
@@ -809,6 +813,8 @@ class Foreman:
         ]
         if review:
             lines += ["", f"## Claudo reviewer\n{review['cp']}: **{review['verdict']}** ({review['report']})"]
+        if item.ship_acks:
+            lines += ["", "## Needs IT attention", *[f"- {a['kind']}: {a['detail']}" for a in item.ship_acks]]
         if approvals:
             lines += ["", "## Approvals", *approvals]
         lines += [
@@ -881,6 +887,10 @@ class Foreman:
         return item
 
     def _do_build(self, item: WorkItem) -> tuple[bool, str]:
+        if item.build_attempts <= 1:
+            # A first build starts clean. Retries and reworks keep their acks: the commits that caused
+            # them are still in the branch history, so IT must still acknowledge them.
+            item.ship_acks = []
         if item.kind != "app":
             return self._do_build_change(item)
         app = self.app_dir(item)
@@ -930,12 +940,21 @@ class Foreman:
         return env
 
     def _commit_leftovers(self, item: WorkItem, app: Path) -> None:
-        files = commit_leftovers(app, item.slug)
-        if files:
+        bookkeeping, drift = commit_leftovers_split(app, item.slug)
+        if bookkeeping:
             item.log(
-                "leftovers",
-                f"committed {len(files)} file(s) left outside the task scopes: {', '.join(files[:8])}",
+                "leftovers", f"committed {len(bookkeeping)} bookkeeping file(s): {', '.join(bookkeeping[:8])}"
             )
+        if drift:
+            listed = ", ".join(drift[:8]) + (f" (+{len(drift) - 8} more)" if len(drift) > 8 else "")
+            item.log("scope_drift", f"{len(drift)} file(s) edited outside every task scope: {listed}")
+            self._add_ack(item, "scope_drift", f"{listed}: edited outside every task's files_touched")
+
+    @staticmethod
+    def _add_ack(item: WorkItem, kind: str, detail: str) -> None:
+        ack = {"kind": kind, "detail": detail}
+        if ack not in item.ship_acks:
+            item.ship_acks.append(ack)
 
     def _clean_tree_gate(self, item: WorkItem) -> GateResult:
         """What gets delivered is the git HEAD: every gate must have judged exactly that."""

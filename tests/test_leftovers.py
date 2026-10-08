@@ -88,8 +88,8 @@ def test_work_left_outside_the_task_scopes_is_committed_so_head_is_the_delivered
     app = foreman.app_dir(item)
     assert item.stage == "ship_review" and porcelain(app) == []
     assert "endpoints documented outside" in git(app, "show", "HEAD:README.md")  # the regression: it WAS lost
-    assert "chore(x): commit work left outside the task scopes" in git(app, "log", "--format=%s")
-    assert any(h["event"] == "leftovers" and "README.md" in h["detail"] for h in item.history)
+    assert "chore(x): edits outside every task scope" in git(app, "log", "--format=%s")  # its own commit
+    assert any(h["event"] == "scope_drift" and "README.md" in h["detail"] for h in item.history)
 
 
 def test_the_final_run_after_ip_approval_also_leaves_a_clean_head(foreman):
@@ -130,3 +130,84 @@ def test_clean_tree_is_an_mvp_and_prod_gate_only(factory_root):
     cfg = load_config(factory_root)
     assert "clean_tree" in cfg.gates_for("mvp") and "clean_tree" in cfg.gates_for("prod")
     assert "clean_tree" not in cfg.gates_for("poc") and "clean_tree" not in cfg.gates_for("pov")
+
+
+# ------------------------------------------------------------------ scope drift needs IT's ack (finding C3)
+
+
+def test_split_commits_keep_bookkeeping_and_scope_drift_apart(app):
+    from factory.project import commit_leftovers_split
+
+    (app / "work" / "x").mkdir(parents=True)
+    (app / "work" / "x" / "tasks.md").write_text("| run log |\n", encoding="utf-8")
+    (app / "app" / "main.py").write_text("x = 2\n", encoding="utf-8")
+    bookkeeping, drift = commit_leftovers_split(app, "x")
+    assert bookkeeping == ["work/x/tasks.md"] and drift == ["app/main.py"] and porcelain(app) == []
+    subjects = git(app, "log", "-2", "--format=%s").splitlines()
+    assert subjects == [
+        "chore(x): edits outside every task scope",
+        "chore(x): commit work left outside the task scopes",
+    ]
+    assert "Scope-Drift: app/main.py" in git(app, "log", "-1", "--format=%b")
+    assert "work/x/tasks.md" not in git(app, "show", "--name-only", "--format=", "HEAD")
+
+
+def test_only_bookkeeping_leftovers_raise_no_acknowledgement(foreman):
+    class OnlyBookkeeping(ScriptedClaudo):
+        def run_build(self, slug, project, **kw):
+            (project / "work" / slug / ".runs").mkdir(parents=True, exist_ok=True)
+            (project / "work" / slug / ".runs" / "extra.log").write_text("x", encoding="utf-8")
+            return super().run_build(slug, project, **kw)
+
+    item = to_ship_review(
+        foreman, OnlyBookkeeping([BuildResult("checkpoint", "CP-1", "x"), BuildResult("done", log="ok")])
+    )
+    assert item.ship_acks == []
+    assert foreman.approve(item, "it", by="bob").status == "shipped"  # no --note needed
+
+
+def test_scope_drift_blocks_the_approval_until_it_justifies_it(foreman):
+    from factory.foreman import FactoryError
+
+    item = to_ship_review(
+        foreman, LeavesWorkBehind([BuildResult("checkpoint", "CP-1", "x"), BuildResult("done", log="ok")])
+    )
+    assert [a["kind"] for a in item.ship_acks] == ["scope_drift"] and "README.md" in item.ship_acks[0][
+        "detail"
+    ]
+    with pytest.raises(FactoryError, match=r"scope_drift: README\.md.*--note"):
+        foreman.approve(item, "it", by="bob")
+    assert item.status == "waiting"  # nothing was signed
+    done = foreman.approve(item, "it", by="bob", note="README addition is fine")
+    assert done.status == "shipped" and done.approvals[-1]["note"] == "README addition is fine"
+
+
+def test_a_non_pass_verdict_and_scope_drift_are_both_listed_in_the_refusal(foreman):
+    from factory.foreman import FactoryError
+
+    engine = LeavesWorkBehind()
+    engine.review = ("WARN", "work/x/.runs/CP-1-review.md")
+    item = to_ship_review(foreman, engine)
+    with pytest.raises(FactoryError) as err:
+        foreman.approve(item, "it", by="bob")
+    assert "reviewer said WARN" in str(err.value) and "scope_drift" in str(err.value)
+
+
+def test_the_acknowledgement_is_shown_to_it_and_in_the_pull_request(foreman, capsys):
+    from factory.cli import _print_item
+
+    item = to_ship_review(foreman, LeavesWorkBehind())
+    _print_item(foreman, item)
+    assert "needs IT: scope_drift: README.md" in capsys.readouterr().out
+    assert "## Needs IT attention" in foreman._pr_body(item) and "README.md" in foreman._pr_body(item)
+
+
+def test_a_retry_keeps_the_acknowledgements_of_the_commits_still_in_history(foreman):
+    engine = LeavesWorkBehind(
+        [BuildResult("checkpoint", "CP-1", "x"), BuildResult("checkpoint", "CP-1", "y")]
+    )
+    item = to_ship_review(foreman, engine)
+    assert item.build_attempts == 1 and len(item.ship_acks) == 1
+    item.build_attempts, item.claudo_cp = 2, ""  # a retry or a rework round re-enters Claudo
+    foreman._do_build(item)
+    assert len(item.ship_acks) == 1  # not cleared (and not duplicated)

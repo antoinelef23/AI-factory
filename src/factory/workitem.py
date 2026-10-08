@@ -87,6 +87,8 @@ class WorkItem:
     claudo_review: dict = field(default_factory=dict)  # {cp, verdict, report}: Claudo's reviewer, shown to IT
     claudo_cost_seen: float = 0.0  # Claudo journal spend already added to cost_usd
     claudo_cp: str = ""  # human checkpoint Claudo is paused at (e.g. CP-1); "" = none pending
+    # {kind, detail}: what IT must acknowledge with --note to ship (e.g. scope drift the factory committed)
+    ship_acks: list[dict] = field(default_factory=list)
     approval_nonce: str = ""  # per-round nonce the signed approval is bound to (a stale token cannot replay)
     claudo_rejection: dict = field(default_factory=dict)  # {cp, reason, by}: IT rejected, rework pending
 

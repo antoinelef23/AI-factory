@@ -178,6 +178,39 @@ def commit_all(app: Path, message: str) -> list[str]:
     return files
 
 
+SCOPE_DRIFT_COMMIT = """chore({slug}): edits outside every task scope
+
+Why: these files were changed by the build but belong to no task's files_touched, so Claudo's scoped commits
+skipped them. They are committed here, apart from the bookkeeping and flagged for IT, who must
+acknowledge them before shipping: nobody planned or traced them.
+
+Scope-Drift: {files}
+Run: auto
+"""
+
+
+def _commit_paths(app: Path, paths: list[str], message: str) -> None:
+    shown = ", ".join(paths[:12]) + (f" (+{len(paths) - 12} more)" if len(paths) > 12 else "")
+    _git(app, "add", "-A", "--", *paths)
+    _git(app, "commit", "-q", "-m", message.replace("{files}", shown), "--", *paths)
+
+
+def commit_leftovers_split(app: Path, slug: str) -> tuple[list[str], list[str]]:
+    """Commit what the build left uncommitted, in two commits. Returns (bookkeeping, scope drift).
+
+    Bookkeeping is the item's own folder (work/<slug>/: run log, journal, reports); it is expected. Everything
+    else was changed outside every task's scope: it gets its own commit so the diff shows it, and the caller
+    flags it for IT."""
+    files = porcelain(app)
+    bookkeeping = [f for f in files if f.startswith(f"work/{slug}/")]
+    drift = [f for f in files if f not in bookkeeping]
+    if bookkeeping:
+        _commit_paths(app, bookkeeping, LEFTOVERS_COMMIT.replace("{slug}", slug))
+    if drift:
+        _commit_paths(app, drift, SCOPE_DRIFT_COMMIT.replace("{slug}", slug))
+    return bookkeeping, drift
+
+
 def commit_leftovers(app: Path, slug: str) -> list[str]:
     """Commit everything left uncommitted so that HEAD is the delivered state. Returns the files committed."""
     return commit_all(app, LEFTOVERS_COMMIT.replace("{slug}", slug))
