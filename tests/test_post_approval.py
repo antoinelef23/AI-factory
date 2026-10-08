@@ -3,7 +3,7 @@
 import pytest
 
 from factory.claudo import BuildResult, ClaudoEngine
-from factory.project import head_sha, post_approval_changes, prepare_project
+from factory.project import head_sha, post_approval_changes
 from tests.test_claudo_build import PlanThenBuildAgent, ScriptedClaudo
 from tests.test_leftovers import git
 
@@ -133,17 +133,20 @@ def test_an_unchanged_review_does_not_trigger_a_second_decision(foreman):
     assert foreman.approve(item, "it", by="bob").status == "shipped"
 
 
-def test_a_non_claudo_item_records_its_gated_head_when_approved(foreman):
-    from factory.agents import AgentResult  # noqa: F401  (single-agent path: no Claudo)
+def test_a_single_agent_change_records_its_branch_tip_as_the_approved_head(foreman, tmp_path):
+    """J-10: replaces a vacuous test. What IT approves for a change built by the single agent is the tip of
+    its branch, the very commit the gates judged."""
+    from tests.test_change_flow import ChangeAgent, shipped_app, to_plan_review
+    from tests.test_leftovers import git as git_out
 
-    item = foreman.run(foreman.intake("Y", "an api", "mvp"))
-    item = foreman.approve(foreman.approve(item, "business"), "it")
-    item = foreman.approve(item, "owner")
-    app = foreman.app_dir(item)
-    prepare_project(app)
-    item.approved_head = ""
-    # offline build: the app is not a git project until prepared; the helper must never borrow a parent repo
-    assert head_sha(foreman.cfg.apps_dir / "nowhere") == ""
+    app = shipped_app(foreman)
+    foreman.runner = ChangeAgent()
+    ch = to_plan_review(foreman, foreman.intake_change(app.slug, "Add a thing", "add a thing", "feature"))
+    ch = foreman.approve(ch, "owner")
+    folder = foreman.app_dir(ch)
+    assert ch.stage == "ship_review" and ch.gated_sha == git_out(folder, "rev-parse", f"factory/{ch.slug}")
+    shipped = foreman.approve(ch, "it", by="bob")
+    assert shipped.approved_head == git_out(folder, "rev-parse", f"factory/{ch.slug}") == shipped.gated_sha
 
 
 # ------------------------------------------------------------- J-1: rejecting after a re-decision reworks

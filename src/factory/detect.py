@@ -42,6 +42,11 @@ class Finding:
     kind: str  # manifest | image | import | error (unparseable manifest) | unanalysed (unsupported ecosystem)
 
 
+# Third-party code, even when a repository commits it: scanning it is slow and judges other people's
+# dependencies, not the app (J-12). Tracked build/ and dist/ ARE scanned: that is the app's own output.
+DEPENDENCY_DIRS = {"node_modules", ".venv", "venv", "vendor", "site-packages"}
+
+
 def _git_files(root: Path, *flags: str) -> list[str] | None:
     p = subprocess.run(
         ["git", "ls-files", "-z", *flags], cwd=root, capture_output=True, text=True, encoding="utf-8"
@@ -58,7 +63,8 @@ def iter_files(root: Path) -> Iterator[Path]:
         untracked = _git_files(root, "-o", "--exclude-standard")
         if tracked is not None and untracked is not None:
             junk_free = [n for n in untracked if not any(part in SKIP_DIRS for part in Path(n).parts)]
-            for name in sorted(set(tracked) | set(junk_free)):
+            own = [n for n in tracked if not any(part in DEPENDENCY_DIRS for part in Path(n).parts)]
+            for name in sorted(set(own) | set(junk_free)):
                 if (root / name).is_file():
                     yield root / name
             return

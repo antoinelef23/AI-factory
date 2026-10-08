@@ -420,3 +420,18 @@ def test_scope_warnings_are_reprompted_then_shown_to_the_owner_without_blocking(
     assert "files_touched does not list it" in plan_prompts[-1]
     assert any(n.startswith("plan scope (heuristic):") and "app/main.py" in n for n in item.notes)
     assert "app/main.py" in foreman.store.read(item, "plan-lint.md")
+
+
+# ------------------------------------------------------------- J-12: committed dependencies are not the app
+
+
+def test_tracked_dependency_folders_are_not_scanned_but_tracked_build_output_is(repo, radar):
+    write(repo, "node_modules/pkg/evil.py", "import flask\n")
+    write(repo, "vendor/lib/evil.py", "import flask\n")
+    git(repo, "add", "-f", "-A")
+    git(repo, "commit", "-q", "-m", "committed dependencies")
+    assert violation(check_project(repo, radar, "poc"), "flask") is None
+    write(repo, "build/out.py", "import flask\n")
+    git(repo, "add", "-f", "-A")
+    git(repo, "commit", "-q", "-m", "committed build output")
+    assert violation(check_project(repo, radar, "poc"), "flask").sources == ("build/out.py",)

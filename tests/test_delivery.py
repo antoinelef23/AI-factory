@@ -638,3 +638,16 @@ def test_cli_publish_is_refused_when_delivery_is_off(factory_root, monkeypatch, 
     capsys.readouterr()
     assert main(["publish", "orders", "--as", "it"]) == 2
     assert "delivery is off" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------- J-9: abandon checks the tree before the host
+
+
+def test_abandon_with_a_dirty_tree_closes_nothing_on_the_host(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    ch = hosted.publish(ch, "it")
+    (hosted.cfg.apps_dir / app.slug / "scratch.txt").write_text("uncommitted\n", encoding="utf-8")
+    with pytest.raises(FactoryError, match="uncommitted changes"):
+        hosted.abandon(ch, "owner", "no longer needed")
+    assert hosted.host.closed == [] and hosted.store.load(ch.slug).status != "abandoned"

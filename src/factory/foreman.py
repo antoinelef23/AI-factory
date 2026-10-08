@@ -1043,6 +1043,9 @@ class Foreman:
             raise FactoryError(f"'{item.slug}' is already merged: revert it with a new change instead")
         if not reason.strip():
             raise FactoryError("abandoning needs a reason (it stays in the history)")
+        app = self.app_dir(item)
+        if (app / ".git").exists() and porcelain(app):  # check BEFORE touching the host (J-9)
+            raise FactoryError(f"{app} has uncommitted changes: commit or discard them before abandoning")
         if item.pr_url and item.pr_state != "MERGED":
             self._close_pull_request_for_abandon(item, reason, pr_closed)
         try:
