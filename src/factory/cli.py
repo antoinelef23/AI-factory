@@ -82,6 +82,11 @@ def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
     elif item.status == "blocked":
         print(f"  next  : fix or explain, then `factory run {item.slug}`")
         print(f"  report: work/{item.slug}/gate-report.md")
+    elif item.status == "shipped" and item.pr_url and item.pr_state == "CLOSED" and not item.merged:
+        print(
+            "  next  : the pull request was closed without merging: reopen it on the host, "
+            f'or `factory abandon {item.slug} --as owner --reason "..."`'
+        )
     elif item.status == "shipped" and item.pr_url and not item.merged:
         print(f"  next  : merge the pull request on the host, then `factory sync {item.slug}`")
     elif item.status == "shipped" and not item.repo_url and f.host is not None and not item.merged:
@@ -148,7 +153,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 def cmd_abandon(args: argparse.Namespace) -> int:
     f = _foreman(args, "offline")
-    item = f.abandon(f.store.load(args.slug), args.role, args.reason, args.by)
+    item = f.abandon(f.store.load(args.slug), args.role, args.reason, args.by, args.pr_closed)
     print(f"Abandoned {item.slug}: {item.target} is free for another change.")
     return 0
 
@@ -399,6 +404,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("slug")
     role_opt(sp, ("it", "owner"))
     sp.add_argument("--reason", required=True)
+    sp.add_argument(
+        "--pr-closed",
+        action="store_true",
+        help="the change's pull request was already closed on the host by hand",
+    )
     sp.set_defaults(func=cmd_abandon)
 
     sp = sub.add_parser("run", help="run automatic stages until the next checkpoint")

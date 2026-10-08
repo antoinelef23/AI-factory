@@ -767,6 +767,15 @@ class Foreman:
         if item.stage != "shipped":
             raise FactoryError(f"'{item.slug}' is not approved yet (it is at stage '{item.stage}')")
         try:
+            published = self.store.load(item.target).repo
+        except KeyError:
+            published = ""
+        if published:
+            raise FactoryError(
+                f"'{item.target}' is published at {published}: a local merge would diverge from it. "
+                f"Publish this change as a pull request (`factory publish {item.slug} --as it`) instead"
+            )
+        try:
             tip = merge_fast_forward(self.app_dir(item), item.slug)
         except ProjectError as e:
             raise FactoryError(str(e)) from e
@@ -862,6 +871,10 @@ class Foreman:
             description = f"{item.title} (built by the AI software factory; maturity {item.maturity})"
             item.repo_url = host.create_private_repo(owner, name, description)
             item.repo = f"{owner}/{name}"
+            # Saved NOW: if the push below fails, the next publish must reuse this repository instead of
+            # tripping over "already exists and was not created by this factory".
+            item.log("repo_created", f"private repository {item.repo}")
+            self.store.save(item)
         add_remote(app, item.repo_url)
         push_branch(app, branch)
         item.log("published", f"IT {by}: private repository {item.repo}".replace("  ", " "))
@@ -949,22 +962,50 @@ class Foreman:
         host = self._host()
         if item.kind == "app" or not item.pr_url:
             raise FactoryError(f"'{item.slug}' has no pull request: publish the change first")
+        if item.status == "abandoned":
+            raise FactoryError(f"'{item.slug}' was abandoned: there is nothing to sync")
         try:
             state = host.pull_request_state(item.pr_url)
-            item.pr_state = state
+            previous, item.pr_state = item.pr_state, state
             if state == "MERGED" and not item.merged:
                 tip = sync_merged_base(self.app_dir(item), item.slug, item.base_branch or "main")
                 item.merged = True
                 self._move_target_head(item, tip)
                 item.log("merged", f"on the host; {item.base_branch} is now at {tip[:8]}")
-            elif state == "CLOSED":
+            elif state == "CLOSED" and previous != "CLOSED":
                 item.log("closed", "the pull request was closed without merging")
         except (DeliveryError, ProjectError) as e:
             raise FactoryError(str(e)) from e
         self.store.save(item)
         return item
 
-    def abandon(self, item: WorkItem, role: str, reason: str, by: str = "") -> WorkItem:
+    def _close_pull_request_for_abandon(self, item: WorkItem, reason: str, pr_closed: bool) -> None:
+        """An abandoned change must not leave a pull request that could still be merged by mistake."""
+        if pr_closed:  # IT closed it on the host by hand
+            item.pr_state = "CLOSED"
+            return
+        if self.host is None:
+            raise FactoryError(
+                f"'{item.slug}' has a pull request ({item.pr_url}): enable delivery so the factory can close "
+                "it, or close it on the host yourself and run abandon again with --pr-closed"
+            )
+        try:
+            state = self.host.pull_request_state(item.pr_url)
+            if state == "MERGED":
+                item.pr_state = "MERGED"
+                self.store.save(item)
+                raise FactoryError(
+                    f"'{item.slug}' was merged on the host: run `factory sync {item.slug}`, not abandon"
+                )
+            if state == "OPEN":
+                self.host.close_pull_request(item.pr_url, f"Abandoned: {reason}")
+        except DeliveryError as e:
+            raise FactoryError(str(e)) from e
+        item.pr_state = "CLOSED"
+
+    def abandon(
+        self, item: WorkItem, role: str, reason: str, by: str = "", pr_closed: bool = False
+    ) -> WorkItem:
         """Drop a change nobody wants anymore, freeing the app for the next one (never a merged change)."""
         if role not in ("it", "owner"):
             raise FactoryError("only IT or the owner abandons a change")
@@ -974,6 +1015,8 @@ class Foreman:
             raise FactoryError(f"'{item.slug}' is already merged: revert it with a new change instead")
         if not reason.strip():
             raise FactoryError("abandoning needs a reason (it stays in the history)")
+        if item.pr_url and item.pr_state != "MERGED":
+            self._close_pull_request_for_abandon(item, reason, pr_closed)
         try:
             abandon_change(self.app_dir(item), item.slug)
         except ProjectError as e:

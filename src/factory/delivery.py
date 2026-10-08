@@ -35,6 +35,10 @@ class GitHost(Protocol):
         """OPEN | MERGED | CLOSED."""
         ...
 
+    def close_pull_request(self, url: str, comment: str) -> None:
+        """Close an open pull request (and delete its branch) without merging it."""
+        ...
+
 
 class GhCli:
     """GitHub through the `gh` CLI (already authenticated on this machine)."""
@@ -86,3 +90,6 @@ class GhCli:
 
     def pull_request_state(self, url: str) -> str:
         return json.loads(self._run("pr", "view", url, "--json", "state"))["state"]
+
+    def close_pull_request(self, url: str, comment: str) -> None:
+        self._run("pr", "close", url, "--comment", comment, "--delete-branch")

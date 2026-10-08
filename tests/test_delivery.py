@@ -19,7 +19,7 @@ class FakeHost:
 
     def __init__(self, base, existing=()):
         self.base, self.existing = base, set(existing)
-        self.created, self.prs, self.state = [], [], "OPEN"
+        self.created, self.prs, self.closed, self.state = [], [], [], "OPEN"
 
     def owner(self):
         return "acme"
@@ -41,10 +41,32 @@ class FakeHost:
     def pull_request_state(self, url):
         return self.state
 
-    def merge_on_host(self, name, head):
-        """What IT does in the web UI: fast-forward the remote main to the pull request's branch."""
+    def close_pull_request(self, url, comment):
+        pr = self.prs[int(url.rsplit("/", 1)[1]) - 1]
+        bare = self.base / f"{pr['repo'].split('/')[1]}.git"
+        subprocess.run(["git", "branch", "-q", "-D", pr["head"]], cwd=bare, check=True)  # --delete-branch
+        self.closed.append((url, comment))
+        self.state = "CLOSED"
+
+    def merge_on_host(self, name, head, how="ff"):
+        """What IT does in the web UI: merge the pull request's branch into the remote main.
+
+        ff = fast-forward, squash = one new commit with the branch's tree, merge = a merge commit."""
         bare = self.base / f"{name}.git"
-        subprocess.run(["git", "update-ref", "refs/heads/main", f"refs/heads/{head}"], cwd=bare, check=True)
+
+        def git(*args):
+            out = subprocess.run(["git", *args], cwd=bare, check=True, capture_output=True, text=True)
+            return out.stdout.strip()
+
+        if how == "ff":
+            git("update-ref", "refs/heads/main", f"refs/heads/{head}")
+        else:
+            parents = ["-p", "refs/heads/main"] + (["-p", f"refs/heads/{head}"] if how == "merge" else [])
+            commit = git(
+                "-c", "user.name=GitHub", "-c", "user.email=noreply@example.test",
+                "commit-tree", f"refs/heads/{head}^{{tree}}", *parents, "-m", f"{how} of {head}",
+            )  # fmt: skip
+            git("update-ref", "refs/heads/main", commit)
         self.state = "MERGED"
 
 
@@ -426,3 +448,193 @@ def test_approval_commits_an_app_that_was_never_in_git_and_records_its_head(fore
     assert not (folder / ".git").exists()
     done = foreman.approve(item, "it")
     assert done.approved_head == git(folder, "rev-parse", "HEAD") and (folder / ".git").exists()
+
+
+# ------------------------------------------------------------------ phase 3: delivery correctness
+
+
+def test_a_failed_push_does_not_orphan_the_repository(hosted, monkeypatch):
+    from factory import foreman as foreman_module
+    from factory.project import ProjectError
+
+    app = shipped_app(hosted)
+    real_push, calls = foreman_module.push_branch, []
+
+    def flaky(*args, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ProjectError("remote: Internal Server Error (HTTP 500)")
+        return real_push(*args, **kw)
+
+    monkeypatch.setattr(foreman_module, "push_branch", flaky)
+    with pytest.raises(FactoryError, match="HTTP 500"):
+        hosted.publish(app, "it")
+    saved = hosted.store.load(app.slug)
+    assert saved.repo == f"acme/app-{app.slug}" and saved.repo_url  # recorded the moment it was created
+    again = hosted.publish(saved, "it")
+    assert len(hosted.host.created) == 1 and again.repo_url == saved.repo_url
+    remote = hosted.host.base / f"app-{app.slug}.git"
+    assert git(remote, "rev-parse", "main") == git(hosted.cfg.apps_dir / app.slug, "rev-parse", "HEAD")
+
+
+def test_a_published_app_refuses_the_local_merge_of_an_unpublished_change(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    with pytest.raises(FactoryError, match="is published at acme/app-.*pull request"):
+        hosted.merge(ch, "it", "bob")
+    assert current_branch(hosted.cfg.apps_dir / app.slug) == f"factory/{ch.slug}"  # nothing moved
+
+
+def test_abandoning_a_change_closes_its_open_pull_request_and_deletes_the_remote_branch(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    ch = hosted.publish(ch, "it")
+    remote = hosted.host.base / f"app-{app.slug}.git"
+    assert git(remote, "branch", "--list", f"factory/{ch.slug}")
+    done = hosted.abandon(ch, "owner", "regression on existing endpoints", "antoine")
+    assert done.status == "abandoned" and done.pr_state == "CLOSED"
+    assert hosted.host.closed == [(ch.pr_url, "Abandoned: regression on existing endpoints")]
+    assert git(remote, "branch", "--list", f"factory/{ch.slug}") == ""
+    with pytest.raises(FactoryError, match="was abandoned"):
+        hosted.sync(done)
+
+
+def test_a_change_merged_on_the_host_cannot_be_abandoned(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    ch = hosted.publish(ch, "it")
+    hosted.host.merge_on_host(f"app-{app.slug}", f"factory/{ch.slug}")
+    with pytest.raises(FactoryError, match="merged on the host: run `factory sync"):
+        hosted.abandon(ch, "owner", "too late")
+    assert hosted.host.closed == [] and hosted.store.load(ch.slug).status != "abandoned"
+
+
+def test_abandoning_without_delivery_enabled_asks_for_pr_closed(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    ch = hosted.publish(ch, "it")
+    hosted.host = None  # delivery switched off afterwards
+    with pytest.raises(FactoryError, match="--pr-closed"):
+        hosted.abandon(ch, "owner", "no longer needed")
+    assert hosted.abandon(ch, "owner", "no longer needed", pr_closed=True).status == "abandoned"
+
+
+def test_sync_leaves_the_app_on_its_branch_when_the_base_diverged(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    ch = hosted.publish(ch, "it")
+    hosted.host.merge_on_host(f"app-{app.slug}", f"factory/{ch.slug}")
+    folder = hosted.cfg.apps_dir / app.slug
+    tree = git(folder, "rev-parse", "main^{tree}")
+    stray = git(folder, "commit-tree", tree, "-p", "main", "-m", "local only")
+    git(
+        folder, "update-ref", "refs/heads/main", stray
+    )  # main moved locally; the app stays on the change branch
+    with pytest.raises(FactoryError, match="diverged"):
+        hosted.sync(ch)
+    assert current_branch(folder) == f"factory/{ch.slug}"
+
+
+def test_a_closed_pull_request_is_logged_once_and_the_next_step_is_shown(hosted, tmp_path, capsys):
+    from factory.cli import _print_item
+
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    ch = hosted.publish(ch, "it")
+    hosted.host.state = "CLOSED"
+    hosted.sync(ch)
+    hosted.sync(ch)
+    assert [h["event"] for h in ch.history].count("closed") == 1
+    _print_item(hosted, ch)
+    assert "closed without merging" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("how", ["ff", "squash", "merge"])
+def test_sync_works_whichever_way_the_pull_request_was_merged(hosted, tmp_path, how):
+    from factory.drift import scan_drift
+
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    ch = hosted.publish(ch, "it")
+    hosted.host.merge_on_host(f"app-{app.slug}", f"factory/{ch.slug}", how=how)
+    ch = hosted.sync(ch)
+    folder = hosted.cfg.apps_dir / app.slug
+    assert ch.merged and current_branch(folder) == "main"
+    assert git(folder, "branch", "--list", f"factory/{ch.slug}") == ""
+    assert "pydantic" not in (folder / "pyproject.toml").read_text(encoding="utf-8")
+    assert scan_drift(hosted.store.all(), hosted.radar, hosted.cfg.apps_dir)[0] == []
+    assert git(folder, "rev-parse", "HEAD") == git(
+        hosted.host.base / f"app-{app.slug}.git", "rev-parse", "main"
+    )
+
+
+def test_gh_closes_a_pull_request_deleting_its_branch_and_never_merges(gh_calls):
+    GhCli().close_pull_request("https://github.com/acme/app-x/pull/3", "Abandoned: no")
+    argv = gh_calls[0]["argv"]
+    assert argv[1:3] == ["pr", "close"] and "--delete-branch" in argv and "merge" not in argv
+
+
+# ------------------------------------------------------------------ the CLI wiring
+
+
+def _configure_cli(factory_root, monkeypatch, provider):
+    monkeypatch.setenv("AI_FACTORY_ROOT", str(factory_root))
+    toml = factory_root / "factory.toml"
+    text = toml.read_text(encoding="utf-8").replace('provider = "none"', f'provider = "{provider}"')
+    toml.write_text(text.replace(', "tests"', "", 1), encoding="utf-8")
+
+
+def _cli_ship(slug="orders"):
+    from factory.cli import main
+
+    assert main(["intake", slug.title(), "--idea", "an api", "--maturity", "poc"]) == 0
+    for argv in (["run", slug], ["approve", slug, "--as", "business"], ["approve", slug, "--as", "owner"]):
+        assert main(argv) == 0
+    assert main(["approve", slug, "--as", "it"]) == 0
+
+
+@pytest.fixture
+def cli_hosted(factory_root, monkeypatch, tmp_path):
+    _configure_cli(factory_root, monkeypatch, "github")
+    (tmp_path / "remotes").mkdir()
+    host = FakeHost(tmp_path / "remotes")
+    monkeypatch.setattr("factory.cli.GhCli", lambda: host)
+    return host
+
+
+def test_cli_publish_and_sync_end_to_end(cli_hosted, capsys):
+    from factory.cli import main
+
+    _cli_ship("orders")
+    capsys.readouterr()
+    assert main(["show", "orders"]) == 0 and "factory publish orders --as it" in capsys.readouterr().out
+    assert main(["publish", "orders", "--as", "it", "--by", "bob"]) == 0
+    out = capsys.readouterr().out
+    assert "private repository acme/app-orders" in out and cli_hosted.created[0][:2] == ("acme", "app-orders")
+    assert main(["show", "orders"]) == 0 and "repo  : acme/app-orders (private)" in capsys.readouterr().out
+    assert main(["change", "orders", "Add a thing", "--idea", "add a thing", "--kind", "feature"]) == 0
+    for argv in (
+        ["run", "add-a-thing"],
+        ["approve", "add-a-thing", "--as", "business"],
+        ["approve", "add-a-thing", "--as", "owner"],
+        ["approve", "add-a-thing", "--as", "it"],
+    ):
+        assert main(argv) == 0
+    capsys.readouterr()
+    assert main(["publish", "add-a-thing", "--as", "it"]) == 0
+    assert (
+        "Pull request for add-a-thing: https://example.test/acme/app-orders/pull/1" in capsys.readouterr().out
+    )
+    assert main(["sync", "add-a-thing"]) == 0 and "pull request OPEN" in capsys.readouterr().out
+    cli_hosted.merge_on_host("app-orders", "factory/add-a-thing")
+    assert main(["sync", "add-a-thing"]) == 0 and "is merged" in capsys.readouterr().out
+
+
+def test_cli_publish_is_refused_when_delivery_is_off(factory_root, monkeypatch, capsys):
+    from factory.cli import main
+
+    _configure_cli(factory_root, monkeypatch, "none")
+    _cli_ship("orders")
+    capsys.readouterr()
+    assert main(["publish", "orders", "--as", "it"]) == 2
+    assert "delivery is off" in capsys.readouterr().err

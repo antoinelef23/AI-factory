@@ -342,10 +342,12 @@ def sync_merged_base(app: Path, slug: str, base: str) -> str:
     if porcelain(app):
         raise ProjectError(f"{app} has uncommitted changes: commit or discard them before syncing")
     _git(app, "fetch", "-q", "origin")
+    before = current_branch(app)
     _git(app, "switch", "-q", base)
     try:
         _git(app, "merge", "--ff-only", f"origin/{base}")
     except ProjectError as e:
+        _git(app, "switch", "-q", before)  # leave the app where it was, like merge_fast_forward
         raise ProjectError(
             f"local {base} has diverged from origin/{base}: resolve it by hand, then sync again"
         ) from e
