@@ -21,6 +21,31 @@ Claudo (`AI-Workflow-gates/_build`, separate repo): `just gate-ci` green on Wind
 reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens flagged, agent environment test).
 **Push Claudo first**: the factory relies on them and says so on the item when they are missing.
 
+### V-1 / V-2: the corrected factory on real Claudo and real GitHub (2026-10-08, Antoine's go)
+Scratch factory `live7` from frozen snapshots; `budget_usd = 3` per orchestrator run; judge on from MVP.
+- **App `ping-service` (MVP): $1.72.** Claudo PASS, all 7 gates, diff exactly the idea, `uv.lock` in the scaffold
+  commit, only bookkeeping leftovers. IT's approval resumed Claudo with `review_reused` (one paid review, not two).
+- **Change `about-endpoint`: $2.72.** The spec kept trailing slashes and near-miss paths as NON-goals (S-1 worked);
+  the diff only adds `GET /about` and tests. Claudo BLOCKed on one lint error that the factory's lint gate had also
+  caught and fixed by retry; Antoine chose reject-for-rework. That rejection was LOST (race below, now fixed); re-sent
+  on the fixed Claudo it reworked T2 (`checkpoint_rejected` in the journal), the review was reused (tree unchanged),
+  IT approved, the resume reused the review again: shipped with no extra cost.
+- **V-2:** published as PRIVATE `antoinelef23/v2-app-ping-service` (the old `app-ping-service` is kept until
+  Antoine deletes it, hence the `v2-app-` prefix) and PR #1 opened: body with gates, PASS, approvals, cost; no
+  approval token among the files. The old PR #1 of `app-ping-service` was closed by `factory abandon` (comment +
+  branch deleted): C8 verified on real GitHub. Waiting: Antoine merges, then `factory sync about-endpoint`.
+- Earlier attempts in `live6` ($1.08) stopped on two factory contradictions, both fixed: the judge rubric demanded an
+  edge case S-1 forbids; the spec mandated an exact `/health` body IT's golden path does not return (Antoine: subset).
+- **Found and fixed live:** Claudo printed "waiting" before honouring a pending rejection, and the factory stops the
+  orchestrator on that line, so a rejection could be consumed and lost (Claudo `4546155`, regression test that fails
+  on the old code, pushed, CI green).
+- **Found, not fixed yet (next):** (1) during the rework the implementer wrote its own untimed row into the approved
+  `tasks.md`; the immutable gate rightly failed, and the retry "fixed" it by recommitting the approved triplet, which
+  also erases Claudo's legitimate run-log rows and spent an agent run ($0.10) on a non-code failure. Restore the
+  approved plan deterministically (keep run-log rows, no agent). (2) The spec writer keeps inventing a "30 requests /
+  500 ms" KPI (judge: fidelity 3). (3) The judge faults a CHANGE spec for lacking the new-app `/health` mandate: it is
+  not told the artifact is a change.
+
 ### Progress after the corrections (2026-10-08, Opus)
 - **P3-1 Backstage radar import**: `factory radar-import tech-radar.json` reads Backstage's tech-radar plugin JSON
   (newest timeline move = ring, company ring/quadrant ids resolved through their names, `key` as alias, optional
@@ -155,9 +180,7 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 ## Not verified
 - The judge enabled during a Claudo-built item (`judge = true`) end to end with real models.
 - Sandbox runner (Docker) on Windows; the bind-mount path form is unit-tested only.
-- `sync` after a REAL merge on GitHub (tested only against local bare repos; V-2).
-- The corrected pipeline against a real Claudo run (V-1): the nonce, review reuse, scope-drift and post-approval
-  checks are tested with doubles and Claudo's own unit tests, not yet end to end.
+- `sync` after a REAL merge on GitHub: PR #1 of `v2-app-ping-service` is open, waiting for Antoine's merge.
 - The billed judge test on the about-endpoint spec (`pytest -m live --live -k edge_case`).
 - `judge_from` with real models. `abandon` and `publish --accept-unverified` against real GitHub.
 
@@ -174,8 +197,8 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 
 - The Claudo reviewer still reads the tree BEFORE the factory commits leftovers. That is now harmless: what it
   missed is committed apart, flagged `scope_drift`, and IT must acknowledge it with a note.
-- `uv.lock` rewritten by a build is outside every task scope, so it raises a `scope_drift` acknowledgement. Expected
-  noise until a lockfile allowance is decided.
+- A dependency a build adds rewrites `uv.lock` outside every task scope: `scope_drift`, by design (new apps get
+  their lock with the scaffold, so a plain `uv run` no longer does).
 - The plan scope check (G-6) is a heuristic over clauses of the task prompt: it misses a path named in a clause
   without a write verb. It narrows the gap, it does not close it (C3 is the backstop).
 - Claudo names a consumed token `.handled-<second>`: two checkpoints consumed in the same second would collide on
@@ -186,14 +209,11 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   already have the recipe. Same class as J-5, not fixed: it would need a deliberate setup commit on the base.
 
 ## Next steps (in order)
-1. **Antoine decides** (CORRECTIONS.md section 0): O-1 close PR #1 and abandon `about-endpoint`; O-2 delete
-   `app-ping-service` (needs `! gh auth refresh -h github.com -s delete_repo`); 
-   push Claudo's three local commits to `portable` (never `origin`) FIRST, then the factory commits to
-   `AI-factory`; `judge_from = "mvp"`.
-2. V-1: re-run the same change from a snapshot of the fixed HEAD (~$2.4 for the app, ~$3 for the change). Expected:
-   no BHV-4, or a `scope_drift` stop that waits for Antoine; no `.approvals/` in git; the post-approval resume
-   logs `review_reused` (no second paid review); if IT rejects, the tasks are really reworked (J-1).
-3. V-2: publish the app and the change, Antoine merges the PR on GitHub (squash), `factory sync`, `factory drift`.
+1. Antoine merges PR #1 of `v2-app-ping-service` on GitHub (squash), then `factory sync about-endpoint` and
+   `factory drift` close V-2. Delete `app-ping-service` when convenient (`! gh auth refresh -h github.com -s
+   delete_repo` first).
+2. Fix the three findings of the live run above (plan restore without an agent, invented KPIs, judge context for
+   changes).
+3. The judge is noisy: several runs or a majority vote before trusting one verdict.
 4. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
-5. P2-5 GitHub issue intake; P3-3 version constraints / P3-4 licence policy from lockfiles; P3-8 more golden
-   paths. (Backstage import and CI read-back are done.)
+5. P2-5 GitHub issue intake; P3-3 version constraints / P3-4 licence policy from lockfiles; P3-8 more golden paths.
