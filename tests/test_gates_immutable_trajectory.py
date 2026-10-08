@@ -32,8 +32,8 @@ def run_to_build(foreman, tamper=None, maturity="poc", engine=None):
 def test_untouched_spec_and_design_pass(foreman):
     item = run_to_build(foreman)
     assert (item.stage, item.status) == ("ship_review", "waiting")
-    assert set(item.approved_hashes) == {"spec.md", "design.md"}
-    assert "spec.md and design.md are as approved" in foreman.store.read(item, "gate-report.md")
+    assert set(item.approved_hashes) == {"spec.md", "design.md", "tasks.md"}
+    assert "spec.md, design.md and tasks.md are as approved" in foreman.store.read(item, "gate-report.md")
 
 
 def test_an_agent_weakening_the_spec_inside_the_app_is_caught(foreman):

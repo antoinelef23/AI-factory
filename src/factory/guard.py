@@ -7,6 +7,7 @@ not only on apps the factory built.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,6 +53,61 @@ def plan_radar_errors(tasks_md: str, radar: Radar, maturity: str) -> list[str]:
                 f"{task}: asks to use {tech.name} ({tech.ring}), not allowed at {maturity}"
                 + (f"; use {alt.name} instead" if alt else "")
             )
+    return errors
+
+
+WRITE_VERB = re.compile(
+    r"\b(edit|modif(?:y|ies|ied)|chang(?:e|es|ed)|updat(?:e|es|ed)|set|add|append|writ(?:e|es)|creat(?:e|es)"
+    r"|delet(?:e|es)|remov(?:e|es)|renam(?:e|es))\b",
+    re.I,
+)
+REPO_PATH = re.compile(r"`([\w./-]+\.(?:py|toml|md|txt|json|ya?ml|cfg|ini|js|ts|tsx|html|css))`")
+FILES_TOUCHED = re.compile(r"^\s*-\s*\*\*files_touched\s*:\s*\*\*\s*(.*)$", re.I)
+PROMPT_MARK = re.compile(r"^\s*-\s*\*\*prompt\s*:\s*\*\*", re.I)
+SENTENCE = re.compile(r"(?<=[.!?])\s+")
+CLAUSE = re.compile(r"[;,:]|(?:then|and|but)", re.I)
+
+
+def _in_scope(path: str, touched: list[str]) -> bool:
+    return any(
+        path == t or (t.endswith("/") and path.startswith(t)) or fnmatch.fnmatch(path, t) for t in touched
+    )
+
+
+def plan_scope_errors(tasks_md: str) -> list[str]:
+    """Tasks whose PROMPT asks to change a file their own `files_touched` does not list.
+
+    Claudo's scoped commit only commits a task's files_touched, so such an edit would be left behind, then
+    swept into a leftovers commit that no task, spec ID or review ever covered. Catching the contradiction
+    in the plan costs nothing. Sentences that forbid ("do not modify ...") are guardrails, not orders."""
+    errors: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    task, touched, in_prompt = "", [], False
+    for line in tasks_md.splitlines():
+        header = TASK_HEADER.match(line)
+        if header:
+            task, touched, in_prompt = header.group(1), [], False
+            continue
+        if not task.startswith("T"):
+            continue
+        ft = FILES_TOUCHED.match(line)
+        if ft:
+            touched = [t.strip().lstrip("./") for t in re.findall(r"`([^`]+)`", ft.group(1))]
+            continue
+        if PROMPT_MARK.match(line):
+            in_prompt = True
+        if not in_prompt:
+            continue
+        for sentence in SENTENCE.split(line.lstrip(" >-*")):
+            if NEGATION.search(sentence):
+                continue
+            for clause in CLAUSE.split(sentence):  # "Read `a.py`, then create `b.py`": only b.py is written
+                if not WRITE_VERB.search(clause):
+                    continue
+                for path in REPO_PATH.findall(clause):
+                    if (task, path) not in seen and not _in_scope(path, touched):
+                        seen.add((task, path))
+                        errors.append(f"{task}: the prompt changes {path} but files_touched does not list it")
     return errors
 
 
@@ -114,7 +170,28 @@ def check_project(root: Path, radar: Radar, maturity: str, docs: list[Path] | No
         if source not in entry[3]:
             entry[3].append(source)
 
+    blind_spots: dict[str, Violation] = {}
     for f in scan_project(root):
+        if f.kind == "error":
+            blind_spots[f"unparseable:{f.source}"] = Violation(
+                f"unparseable:{f.source}",
+                f.source,
+                None,
+                BLOCK,
+                (f.source,),
+                "this manifest cannot be parsed, so the radar cannot see its dependencies: fix it",
+            )
+            continue
+        if f.kind == "unanalysed":
+            blind_spots[f"unanalysed:{f.source}"] = Violation(
+                f"unanalysed:{f.source}",
+                f.name,
+                None,
+                APPROVAL,
+                (f.source,),
+                "this manifest type is not analysed by the radar: IT must review its dependencies by hand",
+            )
+            continue
         tech = radar.find(f.name)
         if tech is None and f.kind == "import":
             continue  # stdlib / local modules: only declared deps count as unknown
@@ -131,6 +208,7 @@ def check_project(root: Path, radar: Radar, maturity: str, docs: list[Path] | No
             record(tech.id, tech.name, tech.id, verdict(tech, maturity), rel)
 
     report = GuardReport(maturity=maturity)
+    report.violations.extend(blind_spots.values())
     for key, (name, tech_id, v, sources) in sorted(seen.items()):
         if v == ALLOW:
             report.allowed.append(key)

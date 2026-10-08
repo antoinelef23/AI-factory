@@ -17,6 +17,11 @@ SECRET_PATTERNS = [
     ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("Anthropic API key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}")),
     ("generic API key", re.compile(r"\bsk-[A-Za-z0-9]{32,}\b")),
+    ("GitHub token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b")),
+    ("GitHub fine-grained token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{60,}")),
+    ("Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("Stripe live key", re.compile(r"\b[rs]k_live_[0-9a-zA-Z]{24,}\b")),
     (
         "hardcoded credential",
         re.compile(r"(?i)\b(?:password|passwd|secret|api_key|apikey|token)\s*[:=]\s*['\"][^'\"\s]{8,}['\"]"),
@@ -36,7 +41,24 @@ TEXT_SUFFIXES = {
     ".cfg",
     ".ini",
     ".md",
+    ".sh",
+    ".bash",
+    ".ps1",
+    ".txt",
+    ".pem",
+    ".key",
+    ".crt",
+    ".conf",
+    ".properties",
+    ".xml",
+    ".html",
+    ".ipynb",
+    ".sql",
+    ".tf",
+    ".tfvars",
 }
+# Files that carry secrets whatever their extension.
+SECRET_FILE_PREFIXES = ("dockerfile", ".env", ".npmrc", ".pypirc", "id_rsa", "id_ed25519", "id_ecdsa")
 
 # (command, cwd) -> (returncode, combined output). Injectable for tests.
 Executor = Callable[[str, Path], tuple[int, str]]
@@ -69,7 +91,9 @@ class GateResult:
 def secrets_gate(app_dir: Path) -> GateResult:
     hits: list[str] = []
     for path in iter_files(app_dir):
-        if path.suffix.lower() not in TEXT_SUFFIXES and not path.name.startswith(".env"):
+        if path.suffix.lower() not in TEXT_SUFFIXES and not path.name.lower().startswith(
+            SECRET_FILE_PREFIXES
+        ):
             continue
         try:
             text = path.read_text(encoding="utf-8")

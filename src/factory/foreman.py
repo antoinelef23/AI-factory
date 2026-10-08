@@ -36,11 +36,12 @@ from factory.design import (
 from factory.detect import pyproject_dependencies
 from factory.drift import Drift, migration_idea
 from factory.gates import Executor, GateResult, format_report, run_gates, secrets_in_history, shell_executor
-from factory.guard import check_project, plan_radar_errors
+from factory.guard import check_project, plan_radar_errors, plan_scope_errors
 from factory.judge import judge
 from factory.project import (
     CHANGE_BUILD_COMMIT,
     CHANGE_TRIPLET_COMMIT,
+    RUN_LOG_ROW,
     ProjectError,
     abandon_change,
     add_remote,
@@ -51,6 +52,7 @@ from factory.project import (
     current_branch,
     head_sha,
     merge_fast_forward,
+    modified_tests,
     porcelain,
     post_approval_changes,
     prepare_project,
@@ -249,6 +251,7 @@ class Foreman:
             self._record_hash(item, "design.md")
         if item.stage == "plan_review":
             self._mark_plan_approved(item, by)
+            self._record_hash(item, "tasks.md")  # the plan, frozen at its approval (run-log rows excluded)
         if item.stage == "ship_review" and not note.strip():
             # The human decides, but not blind: shipping over the reviewer's objection, or over something the
             # factory had to flag, must be justified, and the justification is recorded with the approval.
@@ -531,9 +534,9 @@ class Foreman:
             result = self.engine.lint_plan(
                 item.slug, spec=s.read(item, "spec.md"), design=s.read(item, "design.md"), tasks=tasks
             )
-        radar_errors = plan_radar_errors(tasks, self.radar, item.maturity)
-        result.errors.extend(radar_errors)
-        return None if self.engine is None and not radar_errors else result
+        own_errors = plan_radar_errors(tasks, self.radar, item.maturity) + plan_scope_errors(tasks)
+        result.errors.extend(own_errors)
+        return None if self.engine is None and not own_errors else result
 
     def _do_plan(self, item: WorkItem) -> tuple[bool, str]:
         """Write tasks.md. With Claudo available the plan must pass ITS plan-lint before a human sees
@@ -1208,20 +1211,29 @@ class Foreman:
     def _sha(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+    def _contract_sha(self, name: str, text: str) -> str:
+        """Hash of an approved artifact. Claudo appends run-log rows to tasks.md as it works; those rows are
+        bookkeeping, not part of the approved plan, so they are left out (and CRLF is normalised)."""
+        if name == "tasks.md":
+            text = "\n".join(
+                ln for ln in text.replace("\r\n", "\n").split("\n") if not RUN_LOG_ROW.match(ln)
+            ).rstrip("\n")
+        return self._sha(text)
+
     def _record_hash(self, item: WorkItem, name: str) -> None:
-        item.approved_hashes[name] = self._sha(self.store.read(item, name))
+        item.approved_hashes[name] = self._contract_sha(name, self.store.read(item, name))
 
     def _immutability_gate(self, item: WorkItem) -> GateResult:
-        """spec.md and design.md must be byte-for-byte what a human approved. "Never edit the spec during a
+        """spec.md, design.md and tasks.md must be what a human approved. "Never edit the spec during a
         build" was only a prompt rule: an agent that weakens an eval in its own copy would pass every other
         gate. This makes the rule mechanical, for the store's copy and for the copy inside the app."""
         copies = self.app_dir(item) / "work" / item.slug
         problems = []
-        for name in ("spec.md", "design.md"):
+        for name in ("spec.md", "design.md", "tasks.md"):
             approved = item.approved_hashes.get(name)
             if not approved:
                 continue  # item approved before hashes were recorded: nothing to compare against
-            if self._sha(self.store.read(item, name)) != approved:
+            if self._contract_sha(name, self.store.read(item, name)) != approved:
                 problems.append(
                     f"{name}: changed in work/{item.slug}/ after its approval; amend it through the review "
                     "checkpoint (reject, regenerate, approve again)"
@@ -1229,11 +1241,11 @@ class Foreman:
             copy = copies / name
             if not copy.is_file():
                 problems.append(f"{name}: missing from the app (work/{item.slug}/{name})")
-            elif self._sha(copy.read_text(encoding="utf-8")) != approved:
+            elif self._contract_sha(name, copy.read_text(encoding="utf-8")) != approved:
                 problems.append(
                     f"{name}: modified inside the app during the build; agents never edit the contract"
                 )
-        detail = "\n".join(problems) or "spec.md and design.md are as approved"
+        detail = "\n".join(problems) or "spec.md, design.md and tasks.md are as approved"
         return GateResult("immutable", not problems, detail)
 
     def _trajectory_gate(self, item: WorkItem) -> GateResult:
@@ -1261,6 +1273,16 @@ class Foreman:
         )
         self.store.write(item, "gate-report.md", format_report(results, item.maturity))
         item.gated_sha = ""
+        if item.kind != "app" and item.base_sha:
+            item.ship_acks = [a for a in item.ship_acks if a["kind"] != "tests_modified"]
+            rewritten = modified_tests(app, item.base_sha)
+            if rewritten:
+                listed = ", ".join(rewritten[:8]) + (
+                    f" (+{len(rewritten) - 8} more)" if len(rewritten) > 8 else ""
+                )
+                self._add_ack(
+                    item, "tests_modified", f"{listed}: existing tests were rewritten, not just added to"
+                )
         failed = [r for r in results if not r.ok]
         if failed:
             item.stage = "build"  # the next build gets this detail as feedback

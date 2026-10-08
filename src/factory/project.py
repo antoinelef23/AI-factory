@@ -407,3 +407,19 @@ def ref_exists(app: Path, ref: str) -> bool:
 
 def rev_parse(app: Path, ref: str) -> str:
     return _git(app, "rev-parse", ref)
+
+
+def modified_tests(app: Path, base_sha: str) -> list[str]:
+    """Existing test files (tests/) a change modified, renamed or deleted since `base_sha`, as `path (how)`.
+
+    Adding tests is what a change should do; rewriting the ones that were there can hide a regression."""
+    try:
+        out = _git(app, "diff", "--name-status", "-M", base_sha, "HEAD", "--", "tests")
+    except ProjectError:
+        return []
+    changed: list[str] = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0][:1] in "MDRT":
+            changed.append(f"{parts[1]} ({'deleted' if parts[0][:1] == 'D' else 'modified'})")
+    return changed
