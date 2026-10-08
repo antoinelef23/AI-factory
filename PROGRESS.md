@@ -13,13 +13,22 @@ branch tracks `portable` and `remote.pushDefault = portable` so a plain `git pus
 The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
 
 **Verification command:** `just check` (ruff check + format check + pytest). Last run (2026-10-08, local, exit
-codes checked): **520 passed, 2 skipped** (the skipped ones are the billed calibration tests, `just calibrate`).
+codes checked): **536 passed, 2 skipped** (the skipped ones are the billed calibration tests, `just calibrate`).
 Pushed and green in GitHub CI on Windows and Ubuntu: `cebbbf6`. **Not pushed yet**: every commit after it (waiting
 for Antoine's go, see CORRECTIONS.md sections 0 and 4). The real-engine integration tests skip in CI.
 Claudo (`AI-Workflow-gates/_build`, separate repo): `just gate-ci` green on Windows (1084 + 202 tests) at
 `94202b4`. Three commits are **local only**, not pushed to `portable`: `b9b96c7` (nonce-bound tokens, reviewer
 reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens flagged, agent environment test).
 **Push Claudo first**: the factory relies on them and says so on the item when they are missing.
+
+### Progress after the corrections (2026-10-08, Opus)
+- **P3-1 Backstage radar import**: `factory radar-import tech-radar.json` reads Backstage's tech-radar plugin JSON
+  (newest timeline move = ring, company ring/quadrant ids resolved through their names, `key` as alias, optional
+  `category` / `replacedBy`), with the same validation as the CSV path. 7 tests (`tests/test_importer.py`).
+- **P2-4 CI read back**: `factory sync` records the pull request's CI (pass | fail | pending | none, failing check
+  names), `show` displays it, and a merge made on the host over failing CI is logged `merged_over_red_ci`. The
+  factory still never blocks a host merge (branch protection is the place for that). 9 tests, `gh` adapter
+  included (`gh pr checks` exits 1/8 for failing/pending: the JSON is read anyway). Not run against real GitHub.
 
 ### The 2026-10-08 review and its corrections
 Opus reviewed everything Sonnet built (CORRECTIONS.md has the findings with their evidence, and the plan). Sonnet
@@ -160,7 +169,10 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   without a write verb. It narrows the gap, it does not close it (C3 is the backstop).
 - Claudo names a consumed token `.handled-<second>`: two checkpoints consumed in the same second would collide on
   Windows. Real resumes are minutes apart; not fixed.
-- `gh` is the only git host adapter; GitLab/Bitbucket would implement the same 6-method `GitHost` protocol.
+- `gh` is the only git host adapter; GitLab/Bitbucket would implement the same 7-method `GitHost` protocol.
+- On an app NOT built from the golden path, `prepare_project` still adds an `evals` recipe to its `justfile` and
+  leaves it uncommitted (Claudo's eval gate needs `just evals`). Pre-existing since 2026-10-07; golden-path apps
+  already have the recipe. Same class as J-5, not fixed: it would need a deliberate setup commit on the base.
 
 ## Next steps (in order)
 1. **Antoine decides** (CORRECTIONS.md section 0): O-1 close PR #1 and abandon `about-endpoint`; O-2 delete
@@ -172,4 +184,5 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
    logs `review_reused` (no second paid review); if IT rejects, the tasks are really reworked (J-1).
 3. V-2: publish the app and the change, Antoine merges the PR on GitHub (squash), `factory sync`, `factory drift`.
 4. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
-5. Radar importers for Backstage/other formats; P2-4 CI status as a gate; P2-5 GitHub issue intake.
+5. P2-5 GitHub issue intake; P3-3 version constraints / P3-4 licence policy from lockfiles; P3-8 more golden
+   paths. (Backstage import and CI read-back are done.)

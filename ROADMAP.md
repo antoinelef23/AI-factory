@@ -345,11 +345,11 @@ green on Windows; factory `just check` green.
 | P2-1 | partial | `factory publish` creates a PRIVATE repo per app and pushes the approved commit. Missing: creating it from the golden path *template* repo, and the branch-protection check |
 | P2-2 | partial | One branch `factory/<slug>` and one PR per change, with intent, gates, reviewer verdict, acknowledgements, approvals, cost. Not per build attempt |
 | P2-3 | partial | `factory sync` detects the merge (ff, squash and merge-commit) and updates the local app. Manual: no webhook, no `pr_open` stage |
-| P2-4 | open | CI status of the PR is not read back as a gate |
+| P2-4 | partial | `factory sync` reads the PR's CI back (pass/fail/pending/none, failing checks), `show` displays it, a merge over failing CI is logged. Not enforced: the factory never merges, branch protection on the host is where CI blocks a merge |
 | P2-5 | open | No GitHub issue intake |
 | P2-6 | done | `factory change` (feature / bug / migration) on a branch of the existing app, design = existing stack judged by the current radar, tests that rewrite existing tests need IT's acknowledgement |
 | P2-7 | partial | Factory commits carry `Why:` and `Run:` trailers; task commits come from Claudo's own format |
-| P2-8 | done | `GitHost` protocol (6 methods) with a `gh` adapter and a test double over real bare repos. No GitLab / Azure stubs |
+| P2-8 | done | `GitHost` protocol (7 methods) with a `gh` adapter and a test double over real bare repos. No GitLab / Azure stubs |
 
 **Exit criteria:** from a labelled GitHub issue to a merged PR on a new repo, with the factory commenting
 each checkpoint; the factory token has no merge permission (verified by test against branch protection);
@@ -371,6 +371,16 @@ a feature item on an existing repo produces a PR whose diff passes the radar gat
 | P3-8 | More golden paths | `react-vite` frontend, `python-worker` (queue consumer), `fullstack` (FastAPI + React); golden path manifest declaring which radar techs it covers |
 | P3-9 | Smarter capability extraction | LLM extracts capabilities from the idea as structured output, validated against the radar's categories; technology choice stays deterministic (P1) |
 | P3-10 | Radar-aware spec hints | Triage flags early when an idea needs a capability the radar cannot fill (gap → IT question before spec) |
+
+**Status (2026-10-08):**
+
+| ID | Status | What exists / what is missing |
+|---|---|---|
+| P3-1 | done | `factory radar-import`: BYOR CSV/JSON (French Excel included) and Backstage tech-radar JSON; quadrants become capability hints, missing categories are reported. No spreadsheet template shipped yet |
+| P3-2 | done | `factory radar-diff old new`: what moved ring, what it newly forbids, which apps are affected |
+| P3-6 | partial | `factory drift` (exit 1 on drift) and `factory drift --open` open migration items. Not scheduled: run it from CI or a scheduler |
+| P3-7 | done | Exceptions carry a reason, an owner and an expiry; lapsed ones stop sheltering their technology in the gate and in drift |
+| P3-3, P3-4, P3-5, P3-8, P3-9, P3-10 | open | Version constraints, licence and vulnerability policy, more golden paths, LLM capability extraction, radar-aware hints |
 
 **Exit criteria:** a real-world radar (BYOR CSV with ≥ 50 entries) imports and validates; moving a tech to
 `hold` opens migration items for every affected app (test); a dependency with a known critical CVE blocks a
