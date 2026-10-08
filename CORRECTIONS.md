@@ -338,3 +338,134 @@ O-1..O-3 -> C2-a -> C2-b (Claudo + bridge) -> C3-sec -> C3 -> C4 (Claudo part ne
 D-1..D-4 -> G-1..G-6 -> S-1, P-1, L-1, L-5 -> L-2..L-4 -> V-1 -> V-2.
 C3 before C4 and G-4 (they reuse `ship_acks`). C4 before C5 (`approved_head`). C8 before O-1's local abandon.
 Estimated: ~40 new tests; no billed call until V-1/V-2.
+
+---
+
+## 4. Judge review of the application (Opus 5.5, 2026-10-08)
+
+Method: every item of section 2 was checked against the diff `cebbbf6..94dcc0d` (factory, 36 files, +2520/-125)
+and Claudo `b9b96c7`, not against Sonnet's summary. Suspected defects were confirmed by RUNNING them (six probes,
+kept in the session scratchpad as `probe_judge.py`, each asserting the defect exists; all six passed, so all six
+defects are real). Baseline re-run independently: `uv run pytest -q` **502 passed, 2 skipped**, `ruff check` and
+`ruff format --check` clean, working tree clean. Claudo `gate-ci` (1084 passed) was NOT re-run by the judge.
+
+### 4.1 Scores (1 to 5)
+
+| Criterion | Score | Why |
+|---|---|---|
+| Fidelity to the plan | 4.5 | Every item of phases 1 to 6 is addressed, in order; outward items correctly left to Antoine; the six deviations are declared and reasonable (acks kept on retries, clause-level G-6, `judge_from` off, nonce not in the visible payload, `AI_FACTORY_STATE_DIR`, untracked junk still skipped) |
+| Correctness | 3 | 6 confirmed defects, two of them high: a rejection after a re-decision is silently dropped (J-1), and the exact live scenario still pays a second review and lands in that path (J-2) |
+| Test strength | 3.5 | ~100 new tests, real git and bare repos, ff/squash/merge merges; but no test of the interplay of two new mechanisms (redecide then reject), one vacuous test, one source-grep test, synthetic hunk headers only |
+| Process and safety | 4 | No push, no GitHub action, no billed call; one commit shipped with 4 red tests (`ed12a15`: a pipe into `tail` hid pytest's exit code), admitted and fixed in the next commit |
+| Honesty of the docs | 4 | PROGRESS now tells the real story of the live run; README promises nonce-bound tokens without saying it needs Claudo `b9b96c7`, which is not pushed (J-8) |
+
+**Verdict: REVISE.** Good, faithful work, but not ready to push: J-1, J-2, J-7 and J-8 must be fixed first, because
+the very scenario the corrections were written for (scope drift, then a changed verdict, then a rejection) still
+fails, and now silently.
+
+### 4.2 Confirmed findings and remediation (most severe first)
+
+**J-1 [H] A rejection after a "redecide" never reaches Claudo.** Evidence: probe 1: after `redecide`,
+`reject(...)` leaves `claudo_rejection == {}` and sends the item to `build`. Cause: `_finalize_with_claudo` clears
+`item.claudo_cp` on redecide (`foreman.py:1216`), and `reject()` only hands the reason to Claudo when `claudo_cp` is
+set (`foreman.py:325-326`). Claudo's state says CP-1 is done, so the next build returns "done" at once and the same
+code comes back to IT: IT's rejection is ignored.
+Remediation:
+1. `WorkItem.claudo_cp_consumed: bool = False`. On redecide keep `claudo_cp`, set `claudo_cp_consumed = True`.
+2. `approve()` at ship_review: finalize only `if item.claudo_cp and not item.claudo_cp_consumed`; otherwise
+   `_seal_approved_head`; then clear both fields.
+3. `reject()` keeps setting `claudo_rejection` (claudo_cp is still there). `_build_with_claudo`: if
+   `claudo_cp_consumed`, call a new `ClaudoEngine.reopen_checkpoint(project, slug, cp)` that removes `cp` from
+   `work/<slug>/.runs/state.json` (the orchestrator then re-enters the checkpoint, finds `CP-1.rejected` and reopens
+   the tasks), before `reject_checkpoint`; then clear `claudo_cp_consumed`.
+Tests: probe 1 inverted (`claudo_rejection["reason"]` set after reject); ScriptedClaudo: the build after that
+reject receives the rejection (`engine.rejected` non-empty) and `reopen_checkpoint` was called; real-engine
+integration (skipped in CI): popping CP-1 from the state + `CP-1.rejected` reopens the tasks (Claudo already has the
+mechanics, see its `test_checkpoint_reject_reopens_tasks`).
+
+**J-2 [H] The live scenario still pays a second review and falls into J-1.** Evidence (code reading, Claudo
+`orchestrate.py` `run_review` / `reusable_review`): the report records `reviewed-head: <HEAD>`, but the reviewer reads
+the WORKING TREE. With scope drift (the live case) the tree is dirty at review time; the factory then commits the
+drift, so on resume `git diff <HEAD-at-review> -- . ':(exclude)feature'` is non-empty, the paid panel runs again, the
+report hash changes, and a different non-PASS verdict triggers `redecide` (and then J-1).
+Remediation (Claudo, push to `portable` only with Antoine's go): record the TREE the reviewer saw, not HEAD:
+`GIT_INDEX_FILE=<tmp> git add -A -- . ':(exclude)<feature_rel>'` then `git write-tree` gives `reviewed-tree: <oid>`;
+at resume compute the same oid the same way and reuse when equal. Keep `reviewed-head` for information.
+Tests (Claudo): dirty tree at review, then committed: `review_reused`; a tracked file changed after the review: new
+review; an untracked non-ignored file added: new review.
+
+**J-7 [M] An item paused at its checkpoint before the upgrade hangs for an hour.** Evidence: probe 6: at finalize
+`LAB_APPROVAL_NONCE=""` with `LAB_REQUIRE_NONCE=1` (`foreman.py:1085`); the new Claudo `verify()` refuses, renames the
+token `.invalid-*` and keeps waiting until `build_timeout` (3600 s), then the item blocks.
+Remediation: in `_finalize_with_claudo`, `if not item.approval_nonce: item.approval_nonce = secrets.token_hex(16)`
+before signing (only the signer and the verifying run must share it). Test: probe 6 inverted (non-empty, equal to
+the nonce passed to `sign_approval` and to the final run).
+
+**J-8 [M] Silent loss of replay protection with an older Claudo.** Evidence: `approvals.py` before `b9b96c7` ignores
+`--nonce` (extra argv) and `LAB_REQUIRE_NONCE`; Claudo-portable on GitHub does not have `b9b96c7`. The README and the
+`_finalize_with_claudo` docstring promise nonce-bound tokens unconditionally.
+Remediation: `ClaudoEngine.supports_nonce()` (true when `lab/engine/approvals.py` defines `ENV_NONCE`); when false,
+log `replay protection unavailable: update Claudo` on the item, show it in `factory show`, and say in the README
+"requires Claudo b9b96c7 or later". Push order: Claudo `b9b96c7` (+ J-2) to `portable` BEFORE the factory.
+Test: a fake Claudo home without `ENV_NONCE` logs the warning and the flow still works.
+
+**J-3 [M] Refusals send IT to a command that cannot help.** Evidence: probe 2: after a post-approval block,
+`factory run` leaves the item at `ship_review/waiting`, and approving again repeats "run `factory run x` again"
+(`foreman.py:300`, `:306`); `foreman.py:846` says "Run the item again" for a SHIPPED item, where `run` does nothing.
+Remediation: ship_review refusals say "reject it so it is rebuilt and re-gated: `factory reject <slug> --as it
+--reason \"...\"`"; the publish refusal names the approved commit (`approved_head[:8]`) and says the new state needs a
+change (`factory change ...`). Test: the messages name `factory reject` / `factory change`, and following the reject
+advice really re-gates (back at `ship_review` with a new `gated_sha`).
+
+**J-4 [M] The history secret scan mislabels its hits.** Evidence: probe 3 reported `' -2,5 +2:: AWS access key'`
+instead of `<sha>:a.py: AWS access key`. Cause: `gates.py:182` treats any line that starts with `@@` and is 42+ chars
+long as the commit marker, and a hunk header with function context is exactly that. Merge commits are not diffed
+by `git log -p` (no `-m`), so a secret introduced in a merge resolution is not seen.
+Remediation: `--format=%x00commit %H` and match `line.startswith("\x00commit ")`; take the path from
+`diff --git a/... b/...`; add `-m` so merge commits are diffed against each parent. Tests: probe 3 inverted (exact
+`<sha8>:a.py: AWS access key`); a secret added in a merge commit's resolution is found.
+
+**J-5 [M] The factory dirties apps that predate C2-a.** Evidence: probe 4: `prepare_project` on an existing repo
+leaves `.gitignore` (and `justfile`) modified and uncommitted (`project.py:118`: the commit only happens when tracked
+runtime files exist). Consequences: in a change, `begin_change` commits it into the baseline ON THE BASE BRANCH (main
+moves, the app's `approved_head` no longer matches and its publish is refused); in a Claudo build it shows up as a
+false `scope_drift`; a legacy publish is refused for `.gitignore`.
+Remediation: for an EXISTING repository write `RUNTIME_IGNORES` to `.git/info/exclude` (local, never part of the
+tree, no commit, no drift); keep the golden-path `.gitignore` for new apps; keep `_untrack_runtime_state` for apps
+that already tracked tokens (a deliberate, labelled commit). Test: probe 4 inverted (`porcelain == []` after
+`prepare_project` on an old repo, for `.gitignore`), and `commit_leftovers` still never commits a token there.
+
+**J-6 [M] The plan-scope heuristic can block a valid plan.** Evidence: probe 5: "Add tests in `tests/test_x.py` that
+call the handler defined in `app/main.py`" is reported as an edit of `app/main.py`; `_lint` (`foreman.py:537`) adds it
+to the hard errors, and after `plan_lint_retries` the plan is BLOCKED.
+Remediation: return scope findings as `LintResult.warnings`: they go into the re-prompt feedback while retries
+remain, never block on their own, and are listed in `plan-lint.md` and as an item note the owner sees at
+`plan_review`. Also skip a path that follows a reference preposition in its clause (`in`, `from`, `of`, `defined in`,
+`imported from`). Tests: probe 5: plan not blocked, warning recorded; the real T2 is still re-prompted.
+
+**J-9 [L] `abandon` closes the pull request before checking it can abandon locally.** `foreman.py:1029` closes the
+PR, then `abandon_change` may refuse (dirty tree): the PR is closed on GitHub and the item is not abandoned.
+Remediation: check `porcelain(app)` first, then close, then abandon. Test: with a dirty tree nothing is closed.
+
+**J-10 [L] Two weak tests.** `tests/test_post_approval.py:136` only asserts `head_sha(<missing dir>) == ""`; Claudo
+`tests/orchestrator/test_security.py:100` greps the source for `ENV_NONCE`. Remediation: a single-agent change
+approved at ship_review has `approved_head ==` its branch tip; a Claudo shim scenario that dumps its environment and
+asserts `LAB_APPROVAL_NONCE` is absent.
+
+**J-11 [L] No warning for unbound tokens.** Plan C2-b.1 asked `verify()` to say "unbound ... replay not blocked" for
+a token signed without a nonce; it says "valid signature". Remediation: return
+`(True, "valid signature, unbound (no LAB_APPROVAL_NONCE): replay not blocked")`; test.
+
+**J-12 [L] `factory check` on foreign repos now scans tracked dependency folders.** G-3 scans every tracked file,
+including a committed `node_modules/` or `vendor/` (slow, noisy). Remediation: keep skipping dependency folders
+(`node_modules`, `.venv`, `venv`, `vendor`) even when tracked; keep scanning tracked `build/` and `dist/`. Test.
+
+**J-13 [L] Process.** One red commit (`ed12a15`) in the unpushed history. Remediation: before pushing, squash
+`ed12a15` with its fix `c6fb938` (local history only, Antoine's call); in every verification chain use
+`set -o pipefail` or check pytest's own exit code, never `pytest | tail` before a commit.
+
+### 4.3 Order
+J-1, then J-2 (Claudo), J-7, J-8, J-3, J-4, J-5, J-6, J-9 to J-12, J-13: one commit each, `just check` (and
+`just gate-ci` for Claudo) green before the next; then the pushes Antoine approves; then V-1/V-2. V-1 is the real
+test of J-1/J-2: the live drift scenario must now either reuse the review or, if the verdict moves, let IT reject
+into a real rework.
