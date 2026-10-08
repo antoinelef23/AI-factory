@@ -63,6 +63,7 @@ uv run factory approve customer-callback-log --as business --by Alice
 uv run factory approve customer-callback-log --as owner --by Antoine   # build + gates run here
 uv run factory approve customer-callback-log --as it --by Bob          # ship
 uv run factory show customer-callback-log                      # full history
+uv run factory board                                           # every work item, stage and who it waits on
 ```
 
 Look at `work/customer-callback-log/` (idea, spec, design, tasks, gate report) and
