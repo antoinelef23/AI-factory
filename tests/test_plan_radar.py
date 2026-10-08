@@ -1,6 +1,7 @@
 import pytest
 
 from factory.guard import plan_radar_errors
+from factory.templates import with_run_log
 from tests.test_plan_lint_loop import FakeEngine, Scripted, to_plan
 
 PLAN = """---
@@ -86,7 +87,7 @@ GOOD_PLAN = FORBIDDEN_PLAN.replace("Use Flask for routing.", "Use FastAPI for ro
 def test_a_plan_aiming_at_a_forbidden_stack_is_reprompted_before_any_build(foreman):
     runner = Scripted([FORBIDDEN_PLAN, GOOD_PLAN])
     item = to_plan(foreman, runner, FakeEngine())
-    assert foreman.store.read(item, "tasks.md") == GOOD_PLAN and item.status == "waiting"
+    assert foreman.store.read(item, "tasks.md") == with_run_log(GOOD_PLAN) and item.status == "waiting"
     second = [p for p in runner.prompts if "planner of" in p][1]
     assert "T1: asks to use Flask (hold), not allowed at poc; use FastAPI instead" in second
 
@@ -94,7 +95,7 @@ def test_a_plan_aiming_at_a_forbidden_stack_is_reprompted_before_any_build(forem
 def test_the_radar_check_works_without_claudo_too(foreman):
     runner = Scripted([FORBIDDEN_PLAN, GOOD_PLAN])
     item = to_plan(foreman, runner, None)  # no engine: the radar errors alone drive the retry
-    assert foreman.store.read(item, "tasks.md") == GOOD_PLAN
+    assert foreman.store.read(item, "tasks.md") == with_run_log(GOOD_PLAN)
     assert not (
         foreman.store.dir(item.slug) / "plan-lint.md"
     ).exists()  # final plan clean, no engine: no report

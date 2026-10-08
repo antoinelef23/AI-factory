@@ -302,6 +302,24 @@ covers: [BHV-1, INV-3]
 """
 
 
+RUN_LOG_HEADING = """
+## Run log
+
+Claudo appends one row per node below (date, node, agent, result). It is bookkeeping, not part of the plan.
+
+| date | node | agent | result | note |
+|---|---|---|---|---|
+"""
+
+
+def with_run_log(tasks_md: str) -> str:
+    """End the plan with its own `## Run log` table, where Claudo appends its rows. Without it they land
+    directly under the last block (the checkpoint) and read as part of it. Idempotent."""
+    if "## Run log" in tasks_md:
+        return tasks_md
+    return tasks_md.rstrip("\n") + "\n" + RUN_LOG_HEADING
+
+
 def offline_change_tasks(item: WorkItem) -> str:
     return f"""---
 type: tasks

@@ -181,3 +181,19 @@ def test_both_spec_prompts_forbid_edge_cases_the_idea_did_not_ask_for():
     for prompt in (new, change):
         assert "Every BHV must be something idea.md asks for" in prompt and "trailing slashes" in prompt
     assert "framework's DEFAULT behaviour" in change and "contradicts INV-3" in change
+
+
+# ------------------------------------------------------------ the run log has its own heading (L-5)
+
+
+def test_with_run_log_is_idempotent_and_ends_the_plan_with_a_table():
+    from factory.templates import with_run_log
+
+    once = with_run_log("### T1 - x\n- **depends_on :** []\n")
+    assert once.rstrip().endswith("|---|---|---|---|---|") and "## Run log" in once
+    assert with_run_log(once) == once
+
+
+def test_every_plan_the_foreman_stores_ends_with_the_run_log(foreman):
+    item = foreman.approve(foreman.run(foreman.intake("Y", "an api", "poc")), "business")
+    assert "## Run log" in foreman.store.read(item, "tasks.md")

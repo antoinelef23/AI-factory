@@ -101,3 +101,20 @@ def test_show_prints_the_reviewer_verdict(foreman, capsys):
     item = at_ship_review(foreman, "BLOCK")
     _print_item(foreman, item)
     assert "Claudo reviewer CP-1: BLOCK" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------ the report path of a change (L-1)
+
+
+def test_a_changes_report_path_points_into_the_target_apps_folder(foreman, capsys):
+    from factory.cli import _print_item
+    from tests.test_change_flow import shipped_app
+
+    app = shipped_app(foreman)
+    ch = foreman.intake_change(app.slug, "Add a thing", "add a thing", "feature")
+    ch.claudo_review = {"cp": "CP-1", "verdict": "WARN", "report": "work/add-a-thing/.runs/CP-1-review.md"}
+    assert foreman.report_path(ch) == f"apps/{app.slug}/work/add-a-thing/.runs/CP-1-review.md"
+    _print_item(foreman, ch)
+    out = capsys.readouterr().out
+    assert f"apps/{app.slug}/work/add-a-thing/.runs/CP-1-review.md" in out
+    assert f"apps/{ch.slug}/" not in out

@@ -62,7 +62,7 @@ def _print_item(f: Foreman, item: WorkItem, verbose: bool = False) -> None:
             print(f"  EXPIRED exceptions: {', '.join(lapsed)}: renew with `factory allow`")
     if item.claudo_review:
         r = item.claudo_review
-        print(f"  Claudo reviewer {r['cp']}: {r['verdict']}  apps/{item.slug}/{r['report']}")
+        print(f"  Claudo reviewer {r['cp']}: {r['verdict']}  {f.report_path(item)}")
     for ack in item.ship_acks:
         print(f"  needs IT: {ack['kind']}: {ack['detail']}")
     for kind, j in item.judgements.items():

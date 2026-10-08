@@ -2,6 +2,7 @@ import pytest
 
 from factory.agents import AgentResult
 from factory.claudo import LintResult
+from factory.templates import with_run_log
 from tests.conftest import VALID_SPEC
 
 GOOD = "---\ntype: tasks\nstatus: proposed\n---\n### T1 — good plan\n- **depends_on :** []\n"
@@ -56,7 +57,7 @@ def test_bad_plan_is_reprompted_with_the_lint_errors_then_accepted(foreman):
     runner, engine = Scripted([BAD, GOOD]), FakeEngine()
     item = to_plan(foreman, runner, engine)
     assert (item.stage, item.status) == ("plan_review", "waiting")
-    assert foreman.store.read(item, "tasks.md") == GOOD
+    assert foreman.store.read(item, "tasks.md") == with_run_log(GOOD)
     plan_prompts = [p for p in runner.prompts if "planner of" in p]
     assert len(plan_prompts) == 2
     assert "FAILED Claudo's plan-lint" not in plan_prompts[0]
@@ -118,7 +119,7 @@ def test_an_offline_template_that_fails_lint_is_a_bug_and_blocks_without_retry(f
 def test_without_an_engine_nothing_is_linted(foreman):
     runner = Scripted([BAD])
     item = to_plan(foreman, runner, None)
-    assert item.status == "waiting" and foreman.store.read(item, "tasks.md") == BAD
+    assert item.status == "waiting" and foreman.store.read(item, "tasks.md") == with_run_log(BAD)
     assert not (foreman.store.dir(item.slug) / "plan-lint.md").exists()
 
 

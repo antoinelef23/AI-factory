@@ -75,6 +75,7 @@ from factory.templates import (
     offline_tasks,
     plan_prompt,
     spec_prompt,
+    with_run_log,
 )
 from factory.workitem import ROLES, STEP_BY_NAME, STEPS, Store, WorkItem
 
@@ -258,8 +259,7 @@ class Foreman:
             reasons = []
             if item.claudo_review.get("verdict") not in (None, "PASS"):
                 reasons.append(
-                    f"Claudo's reviewer said {item.claudo_review['verdict']} "
-                    f"(see apps/{item.slug}/{item.claudo_review['report']})"
+                    f"Claudo's reviewer said {item.claudo_review['verdict']} (see {self.report_path(item)})"
                 )
             reasons += [f"{a['kind']}: {a['detail']}" for a in item.ship_acks]
             if reasons:
@@ -574,7 +574,7 @@ class Foreman:
                 f"{item.feedback}\nYour previous tasks.md FAILED Claudo's plan-lint. Fix every error:\n"
                 f"{lint.feedback()}\n\nYour previous tasks.md was:\n{text}"
             )
-        self.store.write(item, "tasks.md", text)
+        self.store.write(item, "tasks.md", with_run_log(text))
         if lint is not None:
             self.store.write(item, "plan-lint.md", f"# Claudo plan-lint\n\n{lint.feedback() or 'clean'}\n")
         self.judge_artifact(item, "plan")
@@ -1151,6 +1151,15 @@ class Foreman:
             return True, f"{scaffold}; Claudo run complete"
         return False, f"{scaffold}; Claudo build {res.outcome}:\n{res.log[-2500:]}"
 
+    def report_path(self, item: WorkItem) -> str:
+        """Where to read Claudo's review report: in the app the item lives in (a change's is its target's)."""
+        report = item.claudo_review.get("report", "")
+        where = self.app_dir(item) / report
+        try:
+            return where.relative_to(self.cfg.root).as_posix()
+        except ValueError:
+            return str(where)
+
     def _review_report(self, item: WorkItem, app: Path) -> Path | None:
         report = item.claudo_review.get("report") if item.claudo_review else ""
         path = app / report if report else None
@@ -1207,7 +1216,7 @@ class Foreman:
                     item.claudo_cp = ""  # Claudo is done; only IT's decision is open
                     return "redecide", (
                         f"the reviewer re-ran after your approval and now says {review[0]} "
-                        f"(you approved {approved_verdict}): read apps/{self.app_dir(item).name}/{review[1]} "
+                        f"(you approved {approved_verdict}): read {self.report_path(item)} "
                         "and decide again"
                     )
         item.claudo_cp = ""

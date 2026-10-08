@@ -70,3 +70,16 @@ def test_the_agent_written_plan_from_the_live_run_was_unreadable_by_claudo(engin
         "x", spec="---\nversion: 0.1.0\n---\n- **INV-1** — x\n", design="d", tasks=live_style
     )
     assert not result.ok and "no task recognized" in result.errors[0]
+
+
+def test_a_plan_ending_in_a_run_log_still_lints_clean_with_the_real_engine(foreman, engine):
+    """L-5: the run-log table the factory appends must not trip Claudo's parser, before or after Claudo
+    writes its own rows into it."""
+    from factory.templates import with_run_log
+
+    item, spec, design, tasks = offline_triplet(foreman)
+    assert "## Run log" in tasks  # the factory writes it itself
+    row = "| 2026-10-08 07:09 | CP-1 | owner | checkpoint validated | |\n"
+    for text in (with_run_log(tasks), with_run_log(tasks) + row):
+        result = engine.lint_plan(item.slug, spec=spec, design=design, tasks=text)
+        assert result.errors == [] and result.warnings == [], result.raw
