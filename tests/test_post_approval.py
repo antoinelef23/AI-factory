@@ -185,3 +185,36 @@ def test_reopen_checkpoint_removes_only_that_node_from_claudos_state(tmp_path):
     assert state.read_text(encoding="utf-8") == '{"T1": "done"}'
     assert ClaudoEngine.reopen_checkpoint(tmp_path, "x", "CP-1") is False  # nothing left to reopen
     assert ClaudoEngine.reopen_checkpoint(tmp_path, "missing", "CP-1") is False
+
+
+# ------------------------------------------------------------- J-7: an item paused before nonces existed
+
+
+def test_an_item_paused_before_nonces_existed_gets_one_at_approval(foreman):
+    engine = Claudo("PASS")
+    item = at_ship_review(foreman, engine)
+    item.approval_nonce = ""  # paused at CP-1 before the upgrade
+    done = foreman.approve(item, "it", by="bob")
+    final_env = engine.runs[-1]["env"]
+    assert done.status == "shipped" and final_env["LAB_APPROVAL_NONCE"]
+    assert engine.signed[-1]["nonce"] == final_env["LAB_APPROVAL_NONCE"] == done.approval_nonce
+
+
+# ------------------------------------------------------------- a block after the final run is reworkable
+
+
+def test_a_ship_blocked_after_the_final_run_is_reworked_by_a_rejection(foreman):
+    def sneaky(project):
+        (project / "app" / "main.py").write_text("# edited after the approval\n", encoding="utf-8")
+
+    engine = Claudo(after_approval=sneaky)
+    engine.outcomes.append(BuildResult("checkpoint", "CP-1", "reworked"))
+    item = at_ship_review(foreman, engine)
+    (foreman.app_dir(item) / "work" / "x" / ".runs" / "state.json").write_text(
+        '{"CP-1": "done"}', encoding="utf-8"
+    )
+    item = foreman.approve(item, "it", by="bob")
+    assert item.status == "blocked" and item.claudo_cp_consumed
+    item = foreman.run(foreman.reject(item, "it", "revert the edit made after the approval", by="bob"))
+    assert engine.reopened == ["CP-1"] and engine.rejected[-1][1] == "revert the edit made after the approval"
+    assert (item.stage, item.status) == ("ship_review", "waiting")

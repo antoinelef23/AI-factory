@@ -1182,6 +1182,9 @@ class Foreman:
         report = self._review_report(item, app)
         item.approved_review_sha256 = self._sha(report.read_text(encoding="utf-8")) if report else ""
         approved_verdict = item.claudo_review.get("verdict")
+        if not item.approval_nonce:  # paused before nonces existed: only signer and verifying run must agree
+            item.approval_nonce = secrets.token_hex(16)
+            self.store.save(item)
         secret = self._signing_secret()
         try:
             self.engine.sign_approval(app, item.slug, item.claudo_cp, by, secret, nonce=item.approval_nonce)
@@ -1200,6 +1203,9 @@ class Foreman:
             self._commit_leftovers(item, app)
         if res.outcome != "done":
             return "blocked", f"Claudo did not complete after approval ({res.outcome}):\n{res.log[-2500:]}"
+        # Claudo has passed its checkpoint. If the ship is blocked or IT must decide again, a rejection has to
+        # reopen that checkpoint first (see _build_with_claudo).
+        item.claudo_cp_consumed = True
         if item.approved_head:
             changed = post_approval_changes(app, item.slug, item.approved_head)
             if changed:
@@ -1217,15 +1223,14 @@ class Foreman:
             if review:
                 item.claudo_review = {"cp": item.claudo_cp, "verdict": review[0], "report": review[1]}
                 if review[0] != "PASS" and review[0] != approved_verdict:
-                    # Claudo consumed the checkpoint; IT decides again. claudo_cp stays, so that a rejection
-                    # can still be handed to Claudo (its checkpoint is reopened first).
-                    item.claudo_cp_consumed = True
+                    # IT decides again. claudo_cp stays (consumed), so that a rejection can still be handed to
+                    # Claudo: its checkpoint is reopened first.
                     return "redecide", (
                         f"the reviewer re-ran after your approval and now says {review[0]} "
                         f"(you approved {approved_verdict}): read {self.report_path(item)} "
                         "and decide again"
                     )
-        item.claudo_cp = ""
+        item.claudo_cp, item.claudo_cp_consumed = "", False
         item.approved_head = head_sha(app)  # moved only by Claudo's bookkeeping, proven just above
         return "ok", "approved"
 
