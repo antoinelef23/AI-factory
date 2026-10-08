@@ -119,7 +119,14 @@ def executor() -> FakeExecutor:
 @pytest.fixture
 def foreman(factory_root: Path, executor: FakeExecutor) -> Foreman:
     cfg = load_config(factory_root)
-    return Foreman(cfg, load_radar(cfg.radar_path), Store(cfg.work_dir), runner=None, executor=executor)
+    return Foreman(
+        cfg,
+        load_radar(cfg.radar_path),
+        Store(cfg.work_dir),
+        runner=None,
+        executor=executor,
+        locker=lambda app: (0, "not locked in tests"),  # no network, no uv
+    )
 
 
 def pytest_addoption(parser):

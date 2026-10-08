@@ -211,3 +211,52 @@ def test_a_retry_keeps_the_acknowledgements_of_the_commits_still_in_history(fore
     item.build_attempts, item.claudo_cp = 2, ""  # a retry or a rework round re-enters Claudo
     foreman._do_build(item)
     assert len(item.ship_acks) == 1  # not cleared (and not duplicated)
+
+
+# ------------------------------------------------------------------ uv.lock is part of a new app's scaffold
+
+
+def test_a_new_apps_lockfile_is_in_its_first_commit_so_tasks_leave_no_drift(foreman):
+    def fake_lock(app):
+        (app / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+        return 0, ""
+
+    class RunsUv(ScriptedClaudo):  # what a task's `uv run` does: nothing new once the lock exists
+        def run_build(self, slug, project, **kw):
+            if not (project / "uv.lock").exists():
+                (project / "uv.lock").write_text("created by uv run\n", encoding="utf-8")
+            return super().run_build(slug, project, **kw)
+
+    foreman.locker = fake_lock
+    item = to_ship_review(foreman, RunsUv())
+    app = foreman.app_dir(item)
+    assert "uv.lock" in git(
+        app, "show", "--name-only", "--format=", git(app, "rev-list", "--max-parents=0", "HEAD")
+    )
+    assert item.ship_acks == [] and any(h["event"] == "lock" for h in item.history)
+
+
+def test_without_the_lock_step_uv_lock_would_be_scope_drift(foreman):
+    class RunsUv(ScriptedClaudo):
+        def run_build(self, slug, project, **kw):
+            (project / "uv.lock").write_text("created by uv run\n", encoding="utf-8")
+            return super().run_build(slug, project, **kw)
+
+    item = to_ship_review(foreman, RunsUv())  # the test locker does nothing
+    assert [a["kind"] for a in item.ship_acks] == ["scope_drift"] and "uv.lock" in item.ship_acks[0]["detail"]
+
+
+def test_a_failed_lock_is_logged_and_does_not_stop_the_build(foreman):
+    foreman.locker = lambda app: (1, "resolution failed")
+    item = to_ship_review(foreman, ScriptedClaudo())
+    assert item.stage == "ship_review"
+    assert any(h["event"] == "lock" and "resolution failed" in h["detail"] for h in item.history)
+
+
+def test_lock_dependencies_does_nothing_without_a_pyproject_or_with_a_lock(tmp_path):
+    from factory.project import lock_dependencies
+
+    assert lock_dependencies(tmp_path) == (0, "nothing to lock")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    assert lock_dependencies(tmp_path) == (0, "nothing to lock")

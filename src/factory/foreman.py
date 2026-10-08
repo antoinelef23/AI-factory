@@ -51,6 +51,7 @@ from factory.project import (
     commit_leftovers_split,
     current_branch,
     head_sha,
+    lock_dependencies,
     merge_fast_forward,
     modified_tests,
     porcelain,
@@ -97,6 +98,7 @@ class Foreman:
         executor: Executor = shell_executor,
         engine: ClaudoEngine | None = None,
         host: GitHost | None = None,
+        locker: Callable[[Path], tuple[int, str]] | None = None,
     ) -> None:
         self.cfg = cfg
         self.radar = radar
@@ -106,6 +108,7 @@ class Foreman:
         self.today: Callable[[], date] = date.today  # injectable clock (tests)
         self.engine = engine  # Claudo: validates every plan with its own plan-lint when present
         self.host = host  # git host for `publish` / `sync` (None = delivery is off)
+        self.locker = locker or lock_dependencies  # `uv lock` for a new app (injectable: tests stay offline)
 
     # ------------------------------------------------------------------ intake
     def intake(self, title: str, idea: str, maturity: str = "poc", requester: str = "business") -> WorkItem:
@@ -1165,6 +1168,11 @@ class Foreman:
 
     def _build_with_claudo(self, item: WorkItem, app: Path, scaffold: str) -> tuple[bool, str]:
         assert self.engine is not None
+        if item.kind == "app" and not (app / ".git").exists():  # a new app: lock before its first commit
+            rc, out = self.locker(app)
+            item.log(
+                "lock", "uv.lock created with the scaffold" if rc == 0 else f"uv lock failed ({rc}): {out}"
+            )
         prepare_project(app)  # git repo + local identity + `evals` recipe: what the orchestrator needs
         if item.claudo_rejection:  # IT said no at the ship review: Claudo reopens the tasks with the reason
             rej = item.claudo_rejection

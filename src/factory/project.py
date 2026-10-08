@@ -9,6 +9,7 @@ commits made by agents never borrow the operator's personal git configuration.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -428,3 +429,29 @@ def modified_tests(app: Path, base_sha: str) -> list[str]:
         if len(parts) >= 2 and parts[0][:1] in "MDRT":
             changed.append(f"{parts[1]} ({'deleted' if parts[0][:1] == 'D' else 'modified'})")
     return changed
+
+
+def lock_dependencies(app: Path) -> tuple[int, str]:
+    """`uv lock` in a NEW app before its first commit, so the lockfile is part of the scaffold.
+
+    The golden path cannot ship one (its pyproject is a template), and without it the first `uv run` of a task
+    leaves an untracked uv.lock that every task flags as outside its scope. A dependency a build really adds
+    still changes uv.lock later, and that still shows up as scope drift. Returns (exit code, output tail)."""
+    if not (app / "pyproject.toml").is_file() or (app / "uv.lock").exists():
+        return 0, "nothing to lock"
+    uv = shutil.which("uv")
+    if uv is None:
+        return 127, "uv not found on PATH"
+    try:
+        p = subprocess.run(
+            [uv, "lock", "--quiet"],
+            cwd=app,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "uv lock timed out"
+    return p.returncode, (p.stdout + p.stderr)[-500:]
