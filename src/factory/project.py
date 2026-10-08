@@ -8,6 +8,7 @@ commits made by agents never borrow the operator's personal git configuration.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -352,3 +353,44 @@ def sync_merged_base(app: Path, slug: str, base: str) -> str:
     if branch_exists(app, branch):
         _git(app, "branch", "-q", "-D", branch)  # its work is in the merged base now
     return _git(app, "rev-parse", "HEAD")
+
+
+# A row Claudo appends to tasks.md for each node: | 2026-10-08 07:09 | CP-1 | owner | checkpoint validated | |
+RUN_LOG_ROW = re.compile(r"^\| \d{4}-\d{2}-\d{2} \d{2}:\d{2} \|")
+
+
+def head_sha(app: Path) -> str:
+    """HEAD of the app's OWN git repository ("" when it is not one: never a parent repository's HEAD)."""
+    if not (app / ".git").exists():
+        return ""
+    p = subprocess.run(
+        ["git", "rev-parse", "--verify", "-q", "HEAD"],
+        cwd=app,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def post_approval_changes(app: Path, slug: str, since: str) -> list[str]:
+    """What changed between `since` (the approved HEAD) and HEAD beyond Claudo's own bookkeeping.
+
+    Acceptable: anything under work/<slug>/.runs/ (journal, reports, state) and run-log rows appended to
+    work/<slug>/tasks.md. Anything else was never gated and never seen by IT."""
+    problems: list[str] = []
+    for name in _git(app, "diff", "--name-only", since, "HEAD").splitlines():
+        if name.startswith(f"work/{slug}/.runs/"):
+            continue
+        if name == f"work/{slug}/tasks.md":
+            diff = _git_raw(app, "diff", "-U0", since, "HEAD", "--", name)
+            for line in diff.splitlines():
+                if line.startswith(("+++", "---", "@@", "diff ", "index ")):
+                    continue
+                if line.startswith("+") and RUN_LOG_ROW.match(line[1:]):
+                    continue
+                problems.append(f"{name} (edited beyond run-log rows)")
+                break
+            continue
+        problems.append(name)
+    return problems

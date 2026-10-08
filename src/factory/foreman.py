@@ -49,8 +49,10 @@ from factory.project import (
     commit_leftovers,
     commit_leftovers_split,
     current_branch,
+    head_sha,
     merge_fast_forward,
     porcelain,
+    post_approval_changes,
     prepare_project,
     push_branch,
     sync_merged_base,
@@ -261,12 +263,19 @@ class Foreman:
                     "or reject with --reason to have it reworked"
                 )
         if item.stage == "ship_review" and item.claudo_cp:
-            ok, detail = self._finalize_with_claudo(item, by or role)
-            if not ok:  # signing or the final orchestrator run failed: nothing ships
+            outcome, detail = self._finalize_with_claudo(item, by or role)
+            if outcome == "blocked":  # signing, the final run, or what it changed failed: nothing ships
                 item.log("failed", detail[:600])
                 item.feedback, item.status = detail, "blocked"
                 self.store.save(item)
                 return item
+            if outcome == "redecide":  # the verdict IT approved is not the one that stands: ask again
+                item.log("redecide", detail[:600])
+                item.feedback, item.status = detail, "waiting"
+                self.store.save(item)
+                return item
+        elif item.stage == "ship_review":
+            item.approved_head = head_sha(self.app_dir(item))
         item.approvals.append({"stage": item.stage, "role": role, "by": by or role, "note": note})
         item.log("approved", f"{role} {by}".strip() + (f": {note}" if note else ""))
         item.feedback = ""
@@ -1001,18 +1010,29 @@ class Foreman:
             return True, f"{scaffold}; Claudo run complete"
         return False, f"{scaffold}; Claudo build {res.outcome}:\n{res.log[-2500:]}"
 
-    def _finalize_with_claudo(self, item: WorkItem, by: str) -> tuple[bool, str]:
+    def _review_report(self, item: WorkItem, app: Path) -> Path | None:
+        report = item.claudo_review.get("report") if item.claudo_review else ""
+        path = app / report if report else None
+        return path if path is not None and path.is_file() else None
+
+    def _finalize_with_claudo(self, item: WorkItem, by: str) -> tuple[str, str]:
         """IT approved the ship review: write the SIGNED approval Claudo is waiting for, let it finish.
 
-        The token is signed with a secret only the factory holds, and records WHO approved: an agent
-        cannot self-approve (Claudo discards an unsigned or forged token)."""
+        Returns ("ok" | "blocked" | "redecide", detail). The token is signed with a secret only the factory
+        holds, bound to this round's nonce, and records WHO approved. What IT approved is remembered (HEAD
+        and the review report it read): after Claudo's final run only its own bookkeeping may have changed,
+        and a verdict that moved to something IT did not approve sends the decision back to IT."""
         assert self.engine is not None
         app = self.app_dir(item)
+        item.approved_head = head_sha(app)
+        report = self._review_report(item, app)
+        item.approved_review_sha256 = self._sha(report.read_text(encoding="utf-8")) if report else ""
+        approved_verdict = item.claudo_review.get("verdict")
         secret = self._signing_secret()
         try:
             self.engine.sign_approval(app, item.slug, item.claudo_cp, by, secret, nonce=item.approval_nonce)
         except EngineError as e:
-            return False, str(e)
+            return "blocked", str(e)
         res = self.engine.run_build(
             item.slug,
             app,
@@ -1025,9 +1045,29 @@ class Foreman:
         if res.ok:
             self._commit_leftovers(item, app)
         if res.outcome != "done":
-            return False, f"Claudo did not complete after approval ({res.outcome}):\n{res.log[-2500:]}"
+            return "blocked", f"Claudo did not complete after approval ({res.outcome}):\n{res.log[-2500:]}"
+        if item.approved_head:
+            changed = post_approval_changes(app, item.slug, item.approved_head)
+            if changed:
+                return "blocked", (
+                    f"Claudo changed {', '.join(changed[:8])} after the approval: not shipped. "
+                    "That content was never gated or seen by IT."
+                )
+        report = self._review_report(item, app)
+        if report and self._sha(report.read_text(encoding="utf-8")) != item.approved_review_sha256:
+            review = self.engine.review_verdict(app, item.slug, item.claudo_cp)
+            if review:
+                item.claudo_review = {"cp": item.claudo_cp, "verdict": review[0], "report": review[1]}
+                if review[0] != "PASS" and review[0] != approved_verdict:
+                    item.claudo_cp = ""  # Claudo is done; only IT's decision is open
+                    return "redecide", (
+                        f"the reviewer re-ran after your approval and now says {review[0]} "
+                        f"(you approved {approved_verdict}): read apps/{self.app_dir(item).name}/{review[1]} "
+                        "and decide again"
+                    )
         item.claudo_cp = ""
-        return True, "approved"
+        item.approved_head = head_sha(app)  # moved only by Claudo's bookkeeping, proven just above
+        return "ok", "approved"
 
     @staticmethod
     def _sha(text: str) -> str:
