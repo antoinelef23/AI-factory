@@ -1,9 +1,19 @@
+import os
 import re
 import subprocess
 
 import pytest
 
-from factory.claudo import BuildResult, ClaudoEngine, EngineError, LintResult, load_or_create_secret
+from factory.claudo import (
+    BuildResult,
+    ClaudoEngine,
+    EngineError,
+    LintResult,
+    load_or_create_secret,
+    migrate_legacy_secret,
+    secret_path,
+    state_dir,
+)
 from tests.conftest import VALID_SPEC, FakeAgentRunner
 
 OK_PLAN = "---\ntype: tasks\nstatus: proposed\n---\n### T1 — Build\n- **depends_on :** []\n"
@@ -39,10 +49,10 @@ class ScriptedClaudo:
         )
         return self.outcomes.pop(0)
 
-    def sign_approval(self, project, slug, cp, author, secret):
+    def sign_approval(self, project, slug, cp, author, secret, nonce=""):
         if self.sign_error:
             raise EngineError(self.sign_error)
-        self.signed.append({"cp": cp, "author": author, "secret": secret, "project": project})
+        self.signed.append({"cp": cp, "author": author, "secret": secret, "project": project, "nonce": nonce})
 
     def reject_checkpoint(self, project, slug, cp, reason, by):
         self.rejected.append((cp, reason, by))
@@ -103,7 +113,8 @@ def test_the_orchestrator_gets_the_signing_secret_and_the_budget(foreman):
 def test_the_secret_is_stable_private_and_outside_the_app(foreman, tmp_path):
     engine = ScriptedClaudo()
     item = at_ship_review(foreman, engine)
-    secret_file = foreman.cfg.root / ".factory" / "approval-secret"
+    secret_file = secret_path(foreman.cfg.root)
+    assert foreman.cfg.root not in secret_file.parents  # not in the tree the build agents work next to
     secret = secret_file.read_text(encoding="utf-8").strip()
     assert secret == engine.runs[0]["env"]["LAB_APPROVAL_SECRET"]
     assert foreman.app_dir(item) not in secret_file.parents  # not reachable from the app's folder
@@ -272,3 +283,92 @@ def test_journal_cost_sums_costs_and_tolerates_junk(tmp_path):
     )
     assert ClaudoEngine.journal_cost(tmp_path, "x") == pytest.approx(2.0)
     assert ClaudoEngine.journal_cost(tmp_path, "missing") == 0.0
+
+
+# ------------------------------------------------------------------ replay protection (review finding C2)
+
+
+def test_every_orchestrator_run_of_a_round_carries_the_same_required_nonce(foreman):
+    engine = ScriptedClaudo([BuildResult("checkpoint", "CP-1", "x"), BuildResult("done", log="ok")])
+    item = foreman.approve(at_ship_review(foreman, engine), "it", by="bob")
+    first, second = engine.runs[0]["env"], engine.runs[1]["env"]
+    assert re.fullmatch(r"[0-9a-f]{32}", first["LAB_APPROVAL_NONCE"])
+    assert first["LAB_REQUIRE_NONCE"] == "1" and second["LAB_APPROVAL_NONCE"] == first["LAB_APPROVAL_NONCE"]
+    assert engine.signed[0]["nonce"] == first["LAB_APPROVAL_NONCE"] == item.approval_nonce
+
+
+def test_a_rejection_starts_a_new_round_with_a_new_nonce(foreman):
+    engine = ScriptedClaudo(
+        [BuildResult("checkpoint", "CP-1", "x"), BuildResult("checkpoint", "CP-1", "again")]
+    )
+    item = at_ship_review(foreman, engine)
+    item = foreman.run(foreman.reject(item, "it", "too weak", by="bob"))
+    assert engine.runs[1]["env"]["LAB_APPROVAL_NONCE"] != engine.runs[0]["env"]["LAB_APPROVAL_NONCE"]
+    assert item.approval_nonce == engine.runs[1]["env"]["LAB_APPROVAL_NONCE"]
+
+
+def test_the_bridge_passes_the_nonce_to_claudos_signer(monkeypatch, tmp_path):
+    import subprocess
+
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr("factory.claudo.subprocess.run", fake_run)
+    engine = ClaudoEngine.__new__(ClaudoEngine)
+    engine.home, engine.python = tmp_path, "python"
+    engine.sign_approval(tmp_path, "x", "CP-1", "bob", "secret", nonce="abc123")
+    assert seen["argv"][-2:] == ["--nonce", "abc123"]
+    engine.sign_approval(tmp_path, "x", "CP-1", "bob", "secret")  # no nonce: the legacy call is unchanged
+    assert "--nonce" not in seen["argv"]
+
+
+# ------------------------------------------------------------------ the secret is not in the factory tree
+
+
+def test_a_legacy_secret_in_the_factory_tree_is_moved_not_copied(tmp_path):
+    root = tmp_path / "factory"
+    legacy = root / ".factory" / "approval-secret"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("legacy-secret\n", encoding="utf-8")
+    assert migrate_legacy_secret(root) is True
+    assert not legacy.exists() and load_or_create_secret(secret_path(root)) == "legacy-secret"
+    assert migrate_legacy_secret(root) is False  # nothing left to move
+
+
+def test_migration_never_overwrites_a_secret_already_in_the_state_dir(tmp_path):
+    root = tmp_path / "factory"
+    legacy = root / ".factory" / "approval-secret"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("old\n", encoding="utf-8")
+    target = secret_path(root)
+    target.parent.mkdir(parents=True)
+    target.write_text("current\n", encoding="utf-8")
+    migrate_legacy_secret(root)
+    assert target.read_text(encoding="utf-8").strip() == "current" and not legacy.exists()
+
+
+def test_two_factories_get_two_secrets(tmp_path):
+    assert secret_path(tmp_path / "a") != secret_path(tmp_path / "b")
+    assert secret_path(tmp_path / "a") == secret_path(tmp_path / "a")
+
+
+def test_the_state_dir_follows_the_platform_unless_overridden(monkeypatch, tmp_path):
+    monkeypatch.delenv("AI_FACTORY_STATE_DIR")
+    if os.name == "nt":
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+        assert state_dir() == tmp_path / "local" / "ai-factory"
+    else:
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
+        assert state_dir() == tmp_path / "xdg" / "ai-factory"
+    monkeypatch.setenv("AI_FACTORY_STATE_DIR", str(tmp_path / "forced"))
+    assert state_dir() == tmp_path / "forced"
+
+
+def test_the_foreman_migrates_a_legacy_secret_when_it_signs(foreman):
+    legacy = foreman.cfg.root / ".factory" / "approval-secret"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("legacy-secret\n", encoding="utf-8")
+    assert foreman._signing_secret() == "legacy-secret" and not legacy.exists()

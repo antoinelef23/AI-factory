@@ -8,6 +8,7 @@ factory.toml, then $CLAUDO_HOME, then a sibling checkout.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -185,7 +186,9 @@ class ClaudoEngine:
             return BuildResult("checkpoint", checkpoint, log, proc.returncode)
         return BuildResult("done" if proc.returncode == 0 else "failed", log=log, returncode=proc.returncode)
 
-    def sign_approval(self, project: Path, slug: str, cp: str, author: str, secret: str) -> Path:
+    def sign_approval(
+        self, project: Path, slug: str, cp: str, author: str, secret: str, nonce: str = ""
+    ) -> Path:
         """Write the HMAC-signed approval token the orchestrator waits for (Claudo's approvals.py, the same
         code path as its approve.sh). The secret is passed to this one process only."""
         feature = project / "work" / slug
@@ -197,6 +200,7 @@ class ClaudoEngine:
                 cp,
                 str(feature),
                 author,
+                *(["--nonce", nonce] if nonce else []),
             ],
             capture_output=True,
             text=True,
@@ -262,9 +266,43 @@ class ClaudoEngine:
         return path
 
 
+def state_dir() -> Path:
+    """Per-user state that must live OUTSIDE every factory and app tree.
+
+    Windows: %LOCALAPPDATA%/ai-factory. Elsewhere: $XDG_STATE_HOME/ai-factory (default
+    ~/.local/state/ai-factory). AI_FACTORY_STATE_DIR overrides it (tests, containers)."""
+    override = os.environ.get("AI_FACTORY_STATE_DIR")
+    if override:
+        return Path(override)
+    if os.name == "nt":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "ai-factory"
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "ai-factory"
+
+
+def secret_path(root: Path) -> Path:
+    """Where THIS factory's approval secret lives: per-user, one folder per factory root."""
+    key = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:12]
+    return state_dir() / key / "approval-secret"
+
+
+def migrate_legacy_secret(root: Path) -> bool:
+    """Move `<root>/.factory/approval-secret` (where earlier versions kept it, inside the tree the build
+    agents work next to) to `secret_path`. Never overwrites an existing secret. True if a file was moved."""
+    legacy = root / ".factory" / "approval-secret"
+    if not legacy.is_file():
+        return False
+    target = secret_path(root)
+    if not (target.is_file() and target.read_text(encoding="utf-8").strip()):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    legacy.unlink()
+    return True
+
+
 def load_or_create_secret(path: Path) -> str:
-    """The factory's approval-signing secret: created once, kept outside every app (and git-ignored), so
-    agents working in an app folder neither hold it in their environment nor find it next to their code."""
+    """The factory's approval-signing secret: created once, kept in the per-user state directory (outside
+    the factory tree and every app) and withheld from the orchestrator's sub-agents' environment. A build
+    agent running arbitrary code as this user could still read it (Claudo's residual M4: sandbox only)."""
     if path.is_file() and path.read_text(encoding="utf-8").strip():
         return path.read_text(encoding="utf-8").strip()
     path.parent.mkdir(parents=True, exist_ok=True)

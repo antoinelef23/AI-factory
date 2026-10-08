@@ -8,13 +8,21 @@ reason in `feedback`, which the next attempt receives.
 from __future__ import annotations
 
 import hashlib
+import secrets
 import shutil
 from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 
 from factory.agents import BUILD_TOOLS, READ_ONLY_TOOLS, ClaudeRunner, strip_fences
-from factory.claudo import ClaudoEngine, EngineError, LintResult, load_or_create_secret
+from factory.claudo import (
+    ClaudoEngine,
+    EngineError,
+    LintResult,
+    load_or_create_secret,
+    migrate_legacy_secret,
+    secret_path,
+)
 from factory.config import Config
 from factory.delivery import DeliveryError, GitHost
 from factory.design import (
@@ -907,11 +915,16 @@ class Foreman:
         return True, f"{detail}; built by agent (${result.cost_usd:.2f})"
 
     def _signing_secret(self) -> str:
-        """Kept outside every app (and git-ignored), so agents neither inherit nor find it."""
-        return load_or_create_secret(self.cfg.root / ".factory" / "approval-secret")
+        """Kept in the per-user state directory, not in the factory tree the build agents work next to."""
+        migrate_legacy_secret(self.cfg.root)
+        return load_or_create_secret(secret_path(self.cfg.root))
 
-    def _claudo_env(self) -> dict[str, str]:
-        env = {"LAB_APPROVAL_SECRET": self._signing_secret()}
+    def _claudo_env(self, item: WorkItem) -> dict[str, str]:
+        env = {
+            "LAB_APPROVAL_SECRET": self._signing_secret(),
+            "LAB_APPROVAL_NONCE": item.approval_nonce,
+            "LAB_REQUIRE_NONCE": "1",  # an unbound token is refused: replay protection is not optional
+        }
         if self.cfg.claudo_budget_usd:
             env["LAB_BUDGET_USD"] = str(self.cfg.claudo_budget_usd)
         return env
@@ -947,7 +960,12 @@ class Foreman:
             rej = item.claudo_rejection
             self.engine.reject_checkpoint(app, item.slug, rej["cp"], rej["reason"], rej["by"])
             item.claudo_rejection = {}
-        res = self.engine.run_build(item.slug, app, env=self._claudo_env(), timeout=self.cfg.claudo_timeout)
+        # A new round of the checkpoint: a fresh nonce, so no token from an earlier round verifies again.
+        item.approval_nonce = secrets.token_hex(16)
+        self.store.save(item)
+        res = self.engine.run_build(
+            item.slug, app, env=self._claudo_env(item), timeout=self.cfg.claudo_timeout
+        )
         self.store.write(item, "claudo-build.log", res.log[-30000:])
         self._add_claudo_cost(item, app)
         if res.ok:
@@ -973,14 +991,14 @@ class Foreman:
         app = self.app_dir(item)
         secret = self._signing_secret()
         try:
-            self.engine.sign_approval(app, item.slug, item.claudo_cp, by, secret)
+            self.engine.sign_approval(app, item.slug, item.claudo_cp, by, secret, nonce=item.approval_nonce)
         except EngineError as e:
             return False, str(e)
         res = self.engine.run_build(
             item.slug,
             app,
             stop_at_checkpoint=False,
-            env=self._claudo_env(),
+            env=self._claudo_env(item),
             timeout=self.cfg.claudo_timeout,
         )
         self.store.write(item, "claudo-final.log", res.log[-30000:])

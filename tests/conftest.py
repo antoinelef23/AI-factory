@@ -136,3 +136,9 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "live" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state_dir(tmp_path_factory, monkeypatch):
+    """The approval secret lives in a per-user state dir: tests must never write to the real one."""
+    monkeypatch.setenv("AI_FACTORY_STATE_DIR", str(tmp_path_factory.mktemp("factory-state")))
