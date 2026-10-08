@@ -66,3 +66,45 @@ def test_golden_path_ships_the_eval_marker_and_recipes():
     gp = REPO / "golden_paths" / "python-fastapi"
     assert has_recipe(gp / "justfile", "evals") and has_recipe(gp / "justfile", "test")
     assert "eval:" in (gp / "pyproject.toml").read_text(encoding="utf-8")  # registered pytest marker
+
+
+# ------------------------------------------------------------------ Claudo runtime state is never delivered
+
+
+def test_prepare_project_ignores_claudo_runtime_state_once(app):
+    prepare_project(app)
+    prepare_project(app)
+    lines = (app / ".gitignore").read_text(encoding="utf-8").splitlines()
+    for pattern in ("work/*/.approvals/", "work/*/.runs/orchestrator.lock", "work/*/.runs/state.json"):
+        assert lines.count(pattern) == 1
+
+
+def test_runtime_state_already_tracked_is_untracked_but_kept_on_disk(app):
+    prepare_project(app)
+    token = app / "work" / "x" / ".approvals" / "CP-1.handled-1"
+    state = app / "work" / "x" / ".runs" / "state.json"
+    journal = app / "work" / "x" / ".runs" / "journal.jsonl"
+    for f in (token, state, journal):
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x\n", encoding="utf-8")
+    git(app, "add", "-f", "-A")  # a run (or an older factory) committed them
+    git(app, "commit", "-q", "-m", "tracked by mistake")
+    assert prepare_project(app) is True
+    tracked = git(app, "ls-files").splitlines()
+    assert "work/x/.approvals/CP-1.handled-1" not in tracked and "work/x/.runs/state.json" not in tracked
+    assert "work/x/.runs/journal.jsonl" in tracked  # the audit trail stays
+    assert token.is_file() and state.is_file()
+    assert git(app, "log", "-1", "--format=%s") == "chore: stop tracking Claudo runtime state"
+    assert prepare_project(app) is False  # idempotent
+
+
+def test_leftovers_never_commit_a_token(app):
+    from factory.project import commit_leftovers
+
+    prepare_project(app)
+    token = app / "work" / "x" / ".approvals" / "CP-1"
+    token.parent.mkdir(parents=True)
+    token.write_text("approved_by=me\n", encoding="utf-8")
+    (app / "other.txt").write_text("x\n", encoding="utf-8")
+    assert commit_leftovers(app, "x") == ["other.txt"]
+    assert "work/x/.approvals/CP-1" not in git(app, "ls-files")

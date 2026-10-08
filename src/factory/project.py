@@ -36,6 +36,24 @@ class ProjectError(Exception):
     pass
 
 
+# Claudo's runtime state is never delivered: a signed approval token committed to git can be copied back into
+# `.approvals/` and replayed, and the lock and state files mean nothing elsewhere. `journal.jsonl` and the
+# `*-review.md` reports stay tracked: they are the audit trail and carry no secret.
+RUNTIME_IGNORES = (
+    "work/*/.approvals/",
+    "work/*/.runs/orchestrator.lock",
+    "work/*/.runs/state.json",
+)
+
+UNTRACK_RUNTIME_COMMIT = """chore: stop tracking Claudo runtime state
+
+Why: approval tokens, the orchestrator lock and its state file are runtime state, not deliverables. A signed
+token kept in git history could be replayed.
+
+Run: auto
+"""
+
+
 def _git_raw(app: Path, *args: str) -> str:
     """git's stdout exactly as printed: `status --porcelain` lines start with a significant space."""
     p = subprocess.run(
@@ -80,6 +98,7 @@ def prepare_project(app: Path) -> bool:
     _git(app, "config", "user.name", IDENTITY[0])
     _git(app, "config", "user.email", IDENTITY[1])
     _git(app, "config", "core.autocrlf", "false")
+    changed |= _ignore_runtime_state(app)
     has_commit = (
         subprocess.run(
             ["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=app, capture_output=True
@@ -90,7 +109,45 @@ def prepare_project(app: Path) -> bool:
         _git(app, "add", "-A")
         _git(app, "commit", "-q", "-m", INITIAL_COMMIT)
         changed = True
+    else:
+        changed |= _untrack_runtime_state(app)
     return changed
+
+
+def _ignore_runtime_state(app: Path) -> bool:
+    """Idempotently add RUNTIME_IGNORES to the app's .gitignore. True if the file changed."""
+    path = app / ".gitignore"
+    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    have = {ln.strip() for ln in existing.splitlines()}
+    missing = [p for p in RUNTIME_IGNORES if p not in have]
+    if not missing:
+        return False
+    text = existing if not existing or existing.endswith("\n") else existing + "\n"
+    path.write_text(text + "\n".join(missing) + "\n", encoding="utf-8", newline="\n")
+    return True
+
+
+def _untrack_runtime_state(app: Path) -> bool:
+    """Stop tracking runtime state a previous run committed (files stay on disk). True if committed."""
+    tracked = [
+        f for f in _git_raw(app, "ls-files", "-z", "--", "work").split("\0") if f and _is_runtime_path(f)
+    ]
+    if not tracked:
+        return False
+    _git(app, "rm", "-q", "--cached", "--", *tracked)
+    # the new .gitignore rides along: it is what keeps these paths untracked
+    _git(app, "add", "--", ".gitignore")
+    _git(app, "commit", "-q", "-m", UNTRACK_RUNTIME_COMMIT)
+    return True
+
+
+def _is_runtime_path(rel: str) -> bool:
+    parts = rel.split("/")
+    if len(parts) < 4 or parts[0] != "work":
+        return False
+    if parts[2] == ".approvals":
+        return True
+    return parts[2] == ".runs" and len(parts) == 4 and parts[3] in ("orchestrator.lock", "state.json")
 
 
 LEFTOVERS_COMMIT = """chore({slug}): commit work left outside the task scopes
