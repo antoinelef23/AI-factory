@@ -70,8 +70,11 @@ def test_a_production_edit_after_the_approval_blocks_the_ship(foreman):
 def test_editing_the_plan_after_the_approval_blocks_the_ship(foreman):
     def rewrite_plan(project):
         path = project / "work" / "x" / "tasks.md"
+        text = path.read_text(encoding="utf-8")
+        assert "### T1 — Build" in text  # the edit must really change the plan, on every OS
+        # LF on purpose: on Windows a CRLF rewrite alone would trip the check and hide a no-op edit
         path.write_text(
-            path.read_text(encoding="utf-8").replace("Implement", "Do something else"), encoding="utf-8"
+            text.replace("### T1 — Build", "### T1 — Do something else"), encoding="utf-8", newline="\n"
         )
 
     item = at_ship_review(foreman, Claudo(after_approval=rewrite_plan))
