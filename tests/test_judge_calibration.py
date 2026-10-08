@@ -173,3 +173,11 @@ def test_the_judge_notices_an_edge_case_the_idea_never_asked_for(capsys):
     assert min(scores.get("fidelity", 5), scores.get("scope", 5)) <= 3 or rep.verdict == "revise", (
         f"the {model} judge let an invented requirement through: {scores}"
     )
+
+
+def test_the_examples_criterion_never_demands_an_edge_case_the_idea_did_not_ask_for():
+    """The spec prompts forbid invented edge cases (S-1); a rubric demanding "at least one edge case" failed
+    every faithful MVP spec of a simple idea (found by the 2026-10-08 live run). The two must agree."""
+    examples = dict(RUBRICS["spec"])["examples"]
+    assert "at least one edge case" not in examples
+    assert "every behavior" in examples and "never a plus" in examples

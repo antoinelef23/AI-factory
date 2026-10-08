@@ -36,7 +36,12 @@ RUBRICS: dict[str, list[Criterion]] = {
         ),
         ("unambiguity", "no vague words ('fast', 'simple') without a number; business terms defined once"),
         ("eval_coverage", "every BHV and INV is covered by at least one executable eval in the evals table"),
-        ("examples", "concrete, realistic input to output examples including at least one edge case"),
+        (
+            "examples",
+            "concrete, realistic input to output examples covering every behavior; edge cases only where "
+            "the idea or the spec's own behaviors define them (an edge case the idea never asked for is a "
+            "fidelity problem, never a plus)",
+        ),
         ("scope", "explicit non-goals; the spec does not choose technologies (that is the design's job)"),
     ],
     "plan": [
