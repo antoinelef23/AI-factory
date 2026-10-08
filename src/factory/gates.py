@@ -165,9 +165,11 @@ def secrets_in_history(app_dir: Path, rev_range: str) -> list[str]:
     """Secrets in the LINES ADDED by the commits of `rev_range`, `<sha>:<path>: <label>` each.
 
     The secrets gate reads the working tree, but a publish pushes every commit: a key committed once and
-    deleted in a later commit is gone from the tree and still in the history that leaves the machine."""
+    deleted in a later commit is gone from the tree and still in the history that leaves the machine. Merge
+    commits are diffed too (`-m`): a key can be introduced in a merge resolution. A key seen in several
+    commits (a branch commit and the merge that brings it in) is reported once, at the newest commit."""
     p = subprocess.run(
-        ["git", "log", "-p", "--no-color", "--no-ext-diff", "--format=@@%H", rev_range],
+        ["git", "log", "-p", "-m", "--no-color", "--no-ext-diff", "--format=%x00commit %H", rev_range],
         cwd=app_dir,
         capture_output=True,
         text=True,
@@ -177,16 +179,20 @@ def secrets_in_history(app_dir: Path, rev_range: str) -> list[str]:
     if p.returncode != 0:
         raise ValueError(f"git log {rev_range} failed in {app_dir}: {(p.stderr or p.stdout).strip()[-300:]}")
     hits: list[str] = []
+    seen: set[tuple[str, str, str]] = set()
     sha = path = ""
+    in_header = False  # between `diff --git` and the first `@@`: file headers, never content
     for line in p.stdout.splitlines():
-        if line.startswith("@@") and len(line) >= 42:
-            sha, path = line[2:10], ""
-        elif line.startswith("+++ "):
-            path = line[4:].removeprefix("b/")
-        elif line.startswith("+") and sha:
+        if line.startswith("\x00commit "):
+            sha, path, in_header = line[8:16], "", False
+        elif line.startswith("diff --git "):
+            path, in_header = line.split(" b/", 1)[1] if " b/" in line else "", True
+        elif line.startswith("@@"):
+            in_header = False
+        elif not in_header and line.startswith("+") and sha:
             for label, pat in SECRET_PATTERNS:
-                if pat.search(line):
-                    hit = f"{sha}:{path}: {label}"
-                    if hit not in hits:
-                        hits.append(hit)
+                key = (path, label, line[1:].strip())
+                if pat.search(line) and key not in seen:
+                    seen.add(key)
+                    hits.append(f"{sha}:{path}: {label}")
     return hits

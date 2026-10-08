@@ -292,3 +292,72 @@ def test_the_scope_check_feeds_the_plan_relint_loop(foreman):
         foreman._lint(item, "### T1 - ok\n- **files_touched :** `a.py`\n- **prompt :**\n  > Edit `a.py`.\n")
         is None
     )
+
+
+# ------------------------------------------------------------- J-4: the history scan names the right place
+
+
+def _repo_with(tmp_path, files):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    for name, text in files.items():
+        write(repo, name, text)
+    prepare_project(repo)
+    return repo
+
+
+def test_history_hits_name_the_commit_and_file_even_after_a_long_hunk_header(tmp_path):
+    from factory.gates import secrets_in_history
+
+    body = "def a_rather_long_function_name_for_context(argument):\n    x = 1\n" * 3
+    repo = _repo_with(tmp_path, {"a.py": body})
+    lines = body.splitlines()
+    lines.insert(4, f'    KEY = "{AWS}"')
+    write(repo, "a.py", "\n".join(lines) + "\n")
+    git(repo, "commit", "-qam", "key")
+    sha = git(repo, "rev-parse", "--short=8", "HEAD")
+    assert secrets_in_history(repo, "HEAD~1..HEAD") == [f"{sha}:a.py: AWS access key"]
+
+
+def test_an_added_line_that_looks_like_a_diff_header_is_still_content(tmp_path):
+    from factory.gates import secrets_in_history
+
+    repo = _repo_with(tmp_path, {"notes.txt": "start\n"})
+    write(repo, "notes.txt", f"start\n++ b/x {AWS}\n")
+    git(repo, "commit", "-qam", "tricky line")
+    assert [h.split(":", 1)[1] for h in secrets_in_history(repo, "HEAD~1..HEAD")] == [
+        "notes.txt: AWS access key"
+    ]
+
+
+def test_a_secret_introduced_in_a_merge_resolution_is_found(tmp_path):
+    from factory.gates import secrets_in_history
+
+    repo = _repo_with(tmp_path, {"a.py": "x = 1\n"})
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "switch", "-q", "-c", "side")
+    write(repo, "b.py", "y = 2\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "side work")
+    git(repo, "switch", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "--no-commit", "side")
+    write(repo, "c.py", f'KEY = "{AWS}"\n')  # only in the merge commit
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "merge side")
+    merge = git(repo, "rev-parse", "--short=8", "HEAD")
+    assert secrets_in_history(repo, f"{base}..HEAD") == [f"{merge}:c.py: AWS access key"]
+
+
+def test_a_key_seen_in_a_branch_commit_and_its_merge_is_reported_once(tmp_path):
+    from factory.gates import secrets_in_history
+
+    repo = _repo_with(tmp_path, {"a.py": "x = 1\n"})
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "switch", "-q", "-c", "side")
+    write(repo, "k.py", f'KEY = "{AWS}"\n')
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "key on a branch")
+    git(repo, "switch", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "-m", "merge", "side")
+    hits = secrets_in_history(repo, f"{base}..HEAD")
+    assert len(hits) == 1 and hits[0].endswith(":k.py: AWS access key")
