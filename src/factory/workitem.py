@@ -93,6 +93,9 @@ class WorkItem:
     approved_head: str = ""  # app HEAD when IT approved the ship review: what was gated and approved
     approved_review_sha256: str = ""  # hash of the reviewer report IT read when approving
     approval_nonce: str = ""  # per-round nonce the signed approval is bound to (a stale token cannot replay)
+    # Claudo already consumed claudo_cp (its final run is done) while IT still has to decide: a rejection must
+    # first reopen that checkpoint in Claudo's state
+    claudo_cp_consumed: bool = False
     claudo_rejection: dict = field(default_factory=dict)  # {cp, reason, by}: IT rejected, rework pending
 
     @property

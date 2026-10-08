@@ -265,6 +265,20 @@ class ClaudoEngine:
         path.write_text(f"reason={clean}\nby={by}\n", encoding="utf-8", newline="\n")
         return path
 
+    @staticmethod
+    def reopen_checkpoint(project: Path, slug: str, cp: str) -> bool:
+        """Make a checkpoint Claudo already consumed pending again, by removing it from the run state, so the
+        next run re-enters it (and finds a `.rejected` file there). True if the state changed."""
+        state = project / "work" / slug / ".runs" / "state.json"
+        if not state.is_file():
+            return False
+        data = json.loads(state.read_text(encoding="utf-8"))
+        if cp not in data:
+            return False
+        del data[cp]
+        state.write_text(json.dumps(data), encoding="utf-8", newline="\n")
+        return True
+
 
 def state_dir() -> Path:
     """Per-user state that must live OUTSIDE every factory and app tree.

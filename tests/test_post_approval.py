@@ -110,7 +110,7 @@ def test_a_review_that_changed_to_another_non_pass_verdict_sends_the_decision_ba
     item = foreman.approve(item, "it", by="bob", note="accepted the BLOCK knowingly")
     assert (item.stage, item.status) == ("ship_review", "waiting")
     assert "re-ran after your approval" in item.feedback and "WARN" in item.feedback
-    assert item.claudo_cp == "" and not any(a["role"] == "it" for a in item.approvals)
+    assert item.claudo_cp_consumed and not any(a["role"] == "it" for a in item.approvals)
     assert item.claudo_review["verdict"] == "WARN"  # the verdict that now stands
 
 
@@ -144,3 +144,44 @@ def test_a_non_claudo_item_records_its_gated_head_when_approved(foreman):
     item.approved_head = ""
     # offline build: the app is not a git project until prepared; the helper must never borrow a parent repo
     assert head_sha(foreman.cfg.apps_dir / "nowhere") == ""
+
+
+# ------------------------------------------------------------- J-1: rejecting after a re-decision reworks
+
+
+def test_rejecting_after_a_redecision_hands_the_reason_to_claudo_and_reopens_its_checkpoint(foreman):
+    engine = Claudo("BLOCK", after_approval=rewrite_review("WARN"))
+    engine.outcomes.append(BuildResult("checkpoint", "CP-1", "reworked"))  # the rework pauses again
+    item = at_ship_review(foreman, engine)
+    app = foreman.app_dir(item)
+    state = app / "work" / "x" / ".runs" / "state.json"
+    state.write_text(
+        '{"T1": "done", "CP-1": "done"}', encoding="utf-8"
+    )  # what Claudo leaves after its final run
+    item = foreman.approve(item, "it", by="bob", note="knowing")
+    assert item.status == "waiting" and item.claudo_cp_consumed
+    item = foreman.reject(item, "it", "the WARN is right: do not touch existing endpoints", by="bob")
+    assert item.claudo_rejection["reason"].startswith("the WARN is right")
+    item = foreman.run(item)
+    assert engine.reopened == ["CP-1"] and "CP-1" not in state.read_text(encoding="utf-8")
+    assert engine.rejected == [("CP-1", "the WARN is right: do not touch existing endpoints", "bob")]
+    assert (item.stage, item.status) == ("ship_review", "waiting") and not item.claudo_cp_consumed
+
+
+def test_approving_after_a_redecision_does_not_run_claudo_again_and_clears_the_checkpoint(foreman):
+    engine = Claudo("BLOCK", after_approval=rewrite_review("WARN"))
+    item = foreman.approve(at_ship_review(foreman, engine), "it", by="bob", note="knowing")
+    runs = len(engine.runs)
+    done = foreman.approve(item, "it", by="bob", note="read the WARN, acceptable")
+    assert done.status == "shipped" and len(engine.runs) == runs
+    assert done.claudo_cp == "" and not done.claudo_cp_consumed
+
+
+def test_reopen_checkpoint_removes_only_that_node_from_claudos_state(tmp_path):
+    state = tmp_path / "work" / "x" / ".runs" / "state.json"
+    state.parent.mkdir(parents=True)
+    state.write_text('{"T1": "done", "CP-1": "done"}', encoding="utf-8")
+    assert ClaudoEngine.reopen_checkpoint(tmp_path, "x", "CP-1") is True
+    assert state.read_text(encoding="utf-8") == '{"T1": "done"}'
+    assert ClaudoEngine.reopen_checkpoint(tmp_path, "x", "CP-1") is False  # nothing left to reopen
+    assert ClaudoEngine.reopen_checkpoint(tmp_path, "missing", "CP-1") is False

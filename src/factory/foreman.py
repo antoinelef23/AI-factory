@@ -269,7 +269,7 @@ class Foreman:
                 )
         if item.stage == "ship_review":
             self._check_gated_head(item)
-        if item.stage == "ship_review" and item.claudo_cp:
+        if item.stage == "ship_review" and item.claudo_cp and not item.claudo_cp_consumed:
             outcome, detail = self._finalize_with_claudo(item, by or role)
             if outcome == "blocked":  # signing, the final run, or what it changed failed: nothing ships
                 item.log("failed", detail[:600])
@@ -283,6 +283,7 @@ class Foreman:
                 return item
         elif item.stage == "ship_review":
             self._seal_approved_head(item)
+            item.claudo_cp, item.claudo_cp_consumed = "", False  # a re-decision approved: Claudo is done
         item.approvals.append({"stage": item.stage, "role": role, "by": by or role, "note": note})
         item.log("approved", f"{role} {by}".strip() + (f": {note}" if note else ""))
         item.feedback = ""
@@ -1127,6 +1128,9 @@ class Foreman:
         prepare_project(app)  # git repo + local identity + `evals` recipe: what the orchestrator needs
         if item.claudo_rejection:  # IT said no at the ship review: Claudo reopens the tasks with the reason
             rej = item.claudo_rejection
+            if item.claudo_cp_consumed:  # rejected after a re-decision: the checkpoint must be pending again
+                self.engine.reopen_checkpoint(app, item.slug, rej["cp"])
+                item.claudo_cp_consumed = False
             self.engine.reject_checkpoint(app, item.slug, rej["cp"], rej["reason"], rej["by"])
             item.claudo_rejection = {}
         # A new round of the checkpoint: a fresh nonce, so no token from an earlier round verifies again.
@@ -1213,7 +1217,9 @@ class Foreman:
             if review:
                 item.claudo_review = {"cp": item.claudo_cp, "verdict": review[0], "report": review[1]}
                 if review[0] != "PASS" and review[0] != approved_verdict:
-                    item.claudo_cp = ""  # Claudo is done; only IT's decision is open
+                    # Claudo consumed the checkpoint; IT decides again. claudo_cp stays, so that a rejection
+                    # can still be handed to Claudo (its checkpoint is reopened first).
+                    item.claudo_cp_consumed = True
                     return "redecide", (
                         f"the reviewer re-ran after your approval and now says {review[0]} "
                         f"(you approved {approved_verdict}): read {self.report_path(item)} "
