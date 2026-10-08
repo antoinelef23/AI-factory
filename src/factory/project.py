@@ -99,7 +99,7 @@ def prepare_project(app: Path) -> bool:
     _git(app, "config", "user.name", IDENTITY[0])
     _git(app, "config", "user.email", IDENTITY[1])
     _git(app, "config", "core.autocrlf", "false")
-    changed |= _ignore_runtime_state(app)
+    _ignore_runtime_state(app)  # local exclude file: not a change of the app
     has_commit = (
         subprocess.run(
             ["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=app, capture_output=True
@@ -116,8 +116,15 @@ def prepare_project(app: Path) -> bool:
 
 
 def _ignore_runtime_state(app: Path) -> bool:
-    """Idempotently add RUNTIME_IGNORES to the app's .gitignore. True if the file changed."""
-    path = app / ".gitignore"
+    """Idempotently add RUNTIME_IGNORES to the repository's local exclude file (.git/info/exclude).
+
+    Local on purpose: it never changes the app's tree, so the factory never dirties an existing app (a
+    .gitignore edit would land in a baseline commit on the base branch, or show up as scope drift). New apps
+    also carry the patterns in the golden path's own .gitignore. True if the exclude file changed."""
+    path = Path(_git(app, "rev-parse", "--git-path", "info/exclude"))
+    if not path.is_absolute():
+        path = app / path
+    path.parent.mkdir(parents=True, exist_ok=True)
     existing = path.read_text(encoding="utf-8") if path.is_file() else ""
     have = {ln.strip() for ln in existing.splitlines()}
     missing = [p for p in RUNTIME_IGNORES if p not in have]
@@ -136,9 +143,7 @@ def _untrack_runtime_state(app: Path) -> bool:
     if not tracked:
         return False
     _git(app, "rm", "-q", "--cached", "--", *tracked)
-    # the new .gitignore rides along: it is what keeps these paths untracked
-    _git(app, "add", "--", ".gitignore")
-    _git(app, "commit", "-q", "-m", UNTRACK_RUNTIME_COMMIT)
+    _git(app, "commit", "-q", "-m", UNTRACK_RUNTIME_COMMIT)  # the index holds only these removals
     return True
 
 

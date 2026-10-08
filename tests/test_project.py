@@ -71,12 +71,34 @@ def test_golden_path_ships_the_eval_marker_and_recipes():
 # ------------------------------------------------------------------ Claudo runtime state is never delivered
 
 
-def test_prepare_project_ignores_claudo_runtime_state_once(app):
+def test_prepare_project_ignores_claudo_runtime_state_once_locally(app):
     prepare_project(app)
     prepare_project(app)
-    lines = (app / ".gitignore").read_text(encoding="utf-8").splitlines()
+    lines = (app / ".git" / "info" / "exclude").read_text(encoding="utf-8").splitlines()
     for pattern in ("work/*/.approvals/", "work/*/.runs/orchestrator.lock", "work/*/.runs/state.json"):
         assert lines.count(pattern) == 1
+
+
+def test_an_existing_app_is_not_dirtied_by_the_runtime_ignores(tmp_path):
+    """J-5: an app that predates the patterns (no golden-path .gitignore lines) stays clean."""
+    old = tmp_path / "old"
+    old.mkdir()
+    # LF bytes: this repo is committed before prepare_project sets core.autocrlf=false
+    (old / ".gitignore").write_bytes(b".venv/\n")
+    (old / "justfile").write_bytes(b"evals:\n    uv run pytest -q -m eval\n")
+    (old / "main.py").write_bytes(b"x = 1\n")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=old, check=True)
+    for args in (["add", "-A"], ["commit", "-qm", "old app"]):
+        subprocess.run(["git", "-c", "user.name=a", "-c", "user.email=a@b", *args], cwd=old, check=True)
+    head = git(old, "rev-parse", "HEAD")
+    prepare_project(old)
+    assert git(old, "status", "--porcelain") == "" and git(old, "rev-parse", "HEAD") == head
+    token = old / "work" / "x" / ".approvals" / "CP-1"
+    token.parent.mkdir(parents=True)
+    token.write_text("sig=x\n", encoding="utf-8")
+    from factory.project import commit_leftovers
+
+    assert commit_leftovers(old, "x") == []  # still never committed
 
 
 def test_runtime_state_already_tracked_is_untracked_but_kept_on_disk(app):
