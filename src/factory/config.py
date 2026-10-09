@@ -12,8 +12,8 @@ CONFIG_NAME = "factory.toml"
 DEFAULT_GATES = {
     "pov": ["radar", "secrets", "immutable"],
     "poc": ["radar", "secrets", "immutable", "tests"],
-    "mvp": ["radar", "secrets", "immutable", "tests", "lint", "trajectory", "clean_tree"],
-    "prod": ["radar", "secrets", "immutable", "tests", "lint", "trajectory", "clean_tree"],
+    "mvp": ["radar", "secrets", "immutable", "tests", "dependencies", "lint", "trajectory", "clean_tree"],
+    "prod": ["radar", "secrets", "immutable", "tests", "dependencies", "lint", "trajectory", "clean_tree"],
 }
 
 

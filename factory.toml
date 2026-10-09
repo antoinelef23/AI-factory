@@ -74,11 +74,13 @@ budget_usd = 0                    # spend cap per orchestrator run (LAB_BUDGET_U
 [gates]
 # immutable  = spec.md / design.md are exactly what was approved (agents never edit the contract)
 # clean_tree  = git HEAD is exactly the delivered state (nothing uncommitted)
+# dependencies = versions locked in uv.lock vs the radar's `version` constraints, and the installed packages'
+#                licences vs the radar's [licenses] forbidden list (after `tests`, when .venv exists)
 # trajectory = HOW a Claudo build went (journal + git scope), only for items built through Claudo
 pov = ["radar", "secrets", "immutable"]
 poc = ["radar", "secrets", "immutable", "tests"]
-mvp = ["radar", "secrets", "immutable", "tests", "lint", "trajectory", "clean_tree"]
-prod = ["radar", "secrets", "immutable", "tests", "lint", "trajectory", "clean_tree"]
+mvp = ["radar", "secrets", "immutable", "tests", "dependencies", "lint", "trajectory", "clean_tree"]
+prod = ["radar", "secrets", "immutable", "tests", "dependencies", "lint", "trajectory", "clean_tree"]
 
 # Shell commands for command-based gates, run inside the app folder.
 [gates.commands]

@@ -35,6 +35,10 @@ idea --> triage --> spec --> [business] --> design --> [IT*] --> plan --> [owner
   manifest it cannot parse **blocks**, and one from an ecosystem it does not analyse (`go.mod`, `pom.xml`,
   `build.gradle`, `Cargo.toml`, `Gemfile`, `composer.json`) needs IT's review. In a git project it scans everything
   git tracks, whatever the folder is called.
+- **Dependency policy** (gate `dependencies`, MVP and prod): a radar entry may pin the versions IT accepts for the
+  package it is named after (`version = ">=0.115"`), checked against the version actually **locked** in `uv.lock`;
+  `[licenses] forbidden = ["AGPL", "SSPL", ...]` in `radar.toml` is checked against each installed package's licence
+  (its metadata in `.venv`). No lockfile: not applicable; a lockfile without an environment: refused.
 - **Apps start from IT golden paths** (`golden_paths/`), so the CI, Dockerfile and layout are IT's, not the agent's.
 - Artifacts use Claudo's triplet format (`spec.md`, `design.md`, `tasks.md`) and travel with the app in
   `apps/<slug>/work/<slug>/`. `factory export` hands them to a Claudo project.

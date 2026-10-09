@@ -10,6 +10,7 @@ from pathlib import Path
 
 from factory.detect import iter_files
 from factory.guard import check_project
+from factory.policy import check_dependencies
 from factory.radar import Radar
 
 SECRET_PATTERNS = [
@@ -119,6 +120,15 @@ def radar_gate(
     return GateResult("radar", not blocking, detail)
 
 
+def dependencies_gate(app_dir: Path, radar: Radar) -> GateResult:
+    """Versions locked in uv.lock against the radar's constraints; installed licences against its policy."""
+    if not (app_dir / "uv.lock").is_file():
+        return GateResult("dependencies", True, "not applicable: the app has no uv.lock")
+    problems = check_dependencies(app_dir, radar)
+    detail = "\n".join(problems) or "locked versions and licences comply with the radar"
+    return GateResult("dependencies", not problems, detail)
+
+
 def command_gate(name: str, command: str | None, app_dir: Path, executor: Executor) -> GateResult:
     if not command:
         return GateResult(
@@ -149,6 +159,8 @@ def run_gates(
             results.append(radar_gate(app_dir, radar, maturity, exceptions, docs))
         elif gate == "secrets":
             results.append(secrets_gate(app_dir))
+        elif gate == "dependencies":
+            results.append(dependencies_gate(app_dir, radar))
         else:
             results.append(command_gate(gate, commands.get(gate), app_dir, executor))
     return results

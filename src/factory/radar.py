@@ -52,6 +52,7 @@ class Tech:
     note: str = ""
     # The name is also an ordinary word ("requests"): in free text it counts only in a code-like context.
     text_strict: bool = False
+    version: str = ""  # versions IT accepts, PEP 440 style (">=0.115, <1"); checked against uv.lock
 
 
 def _strict_pattern(aliases: tuple[str, ...]) -> re.Pattern[str]:
@@ -70,6 +71,7 @@ class Radar:
     company: str
     version: str
     techs: list[Tech]
+    forbidden_licenses: tuple[str, ...] = ()  # [licenses] forbidden: substrings of licence texts
 
     def __post_init__(self) -> None:
         self._by_id = {t.id: t for t in self.techs}
@@ -147,11 +149,29 @@ def load_radar(path: Path) -> Radar:
                 preferred=bool(raw.get("preferred", False)),
                 note=raw.get("note", ""),
                 text_strict=bool(raw.get("text_strict", False)),
+                version=str(raw.get("version", "")).strip(),
             )
         )
+    from factory.policy import PolicyError, parse_spec
+
+    for t in techs:
+        if t.version:
+            try:
+                parse_spec(t.version)
+            except PolicyError as e:
+                errors.append(f"tech {t.id}: {e}")
+    forbidden = data.get("licenses", {}).get("forbidden", [])
+    if not isinstance(forbidden, list) or not all(isinstance(x, str) and x.strip() for x in forbidden):
+        errors.append("[licenses] forbidden must be a list of non-empty strings")
+        forbidden = []
     for t in techs:
         if t.replaced_by and t.replaced_by not in seen:
             errors.append(f"tech {t.id}: replaced_by {t.replaced_by!r} is not on the radar")
     if errors:
         raise RadarError(f"invalid tech radar {path}:\n  - " + "\n  - ".join(errors))
-    return Radar(company=data.get("company", ""), version=str(data.get("version", "")), techs=techs)
+    return Radar(
+        company=data.get("company", ""),
+        version=str(data.get("version", "")),
+        techs=techs,
+        forbidden_licenses=tuple(x.strip() for x in forbidden),
+    )
