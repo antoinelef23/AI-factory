@@ -122,6 +122,23 @@ showing the change branch until IT merges, so `drift` marks that app *in flight*
 failing while a *migration* is pending, since the violation is still there. One open change per app.
 `factory drift --open` now opens migrations that you can simply `run`.
 
+## Sandboxed builds
+
+When an agent writes code, it runs in Claudo's hardened container, not on your machine: the agent itself, Claudo's
+per-task `verify` and evals, and the factory's test and lint gates. Only the app is mounted, the rootfs is
+read-only, every capability is dropped, the approval secret never enters, and the network is internal: an
+allowlist proxy (Anthropic API, PyPI, npm) is the only way out.
+
+```bash
+bash ../AI-Workflow-gates/_build/deploy/sandbox/setup.sh   # once: images, network, proxy (needs Docker)
+claude setup-token                                          # the agent's own credential in the container
+export CLAUDE_CODE_OAUTH_TOKEN=...                          # (or ANTHROPIC_API_KEY)
+```
+
+From MVP up a build waits until the sandbox is ready; `--unsafe-host` on `run`/`approve`/`promote` builds on the
+host instead and puts an `unsafe_host` acknowledgement on the item for IT. A POV/POC falls back to the host with a
+note. Offline (`--runner offline`) nothing needs Docker. The pull request says where the agent's code ran.
+
 ## Golden paths
 
 IT's templates live in `golden_paths/`, each with a `golden.toml` (capabilities it scaffolds, the radar techs it
@@ -235,7 +252,7 @@ in `factory.toml`, else `$CLAUDO_HOME`, else a sibling `../AI-Workflow-gates/_bu
 |---|---|
 | plan | Every `tasks.md` is checked by **Claudo's own plan-lint** (the factory does not re-implement it). An agent plan that fails is re-prompted with the lint errors (`plan_lint_retries`), then blocked. |
 | build (MVP and above) | The orchestrator runs the approved plan **task by task**: dependency DAG, per-task verify, eval gate, reviewer panel, one scoped git commit per task. Below `build_from` (default `mvp`) a single agent builds: see costs. |
-| ship | The factory stops the orchestrator where it pauses for its human checkpoint, runs its own gates, and parks the item at IT's ship review. IT's approval writes a **signed (HMAC) token** carrying the approver's name, bound to a per-round nonce so a token left in a tree cannot be replayed (this needs Claudo `b9b96c7` or later; with an older Claudo the factory puts a `replay protection unavailable` note on the item). The secret lives in your per-user state directory (`%LOCALAPPDATA%\ai-factory` or `$XDG_STATE_HOME/ai-factory`), outside the factory and every app, and is withheld from the orchestrator's agents. An agent that can only write files cannot self-approve. **Residual risk:** an agent that can run arbitrary code as your user could read that secret (Claudo's documented M4); only the sandbox (ROADMAP P1-7) closes it. After the approval Claudo may change nothing but its own bookkeeping, or the ship is blocked. Anything a build edited outside every task's scope, and any existing test it rewrote, is committed apart and needs IT's `--note`. |
+| ship | The factory stops the orchestrator where it pauses for its human checkpoint, runs its own gates, and parks the item at IT's ship review. IT's approval writes a **signed (HMAC) token** carrying the approver's name, bound to a per-round nonce so a token left in a tree cannot be replayed (this needs Claudo `b9b96c7` or later; with an older Claudo the factory puts a `replay protection unavailable` note on the item). The secret lives in your per-user state directory (`%LOCALAPPDATA%\ai-factory` or `$XDG_STATE_HOME/ai-factory`), outside the factory and every app, and is withheld from the orchestrator's agents. An agent that can only write files cannot self-approve. With the sandbox (below) the build agents and the code they write never see it; on the host (`--unsafe-host`, or a POV/POC when Docker is down) an agent running code as your user could read it (Claudo's documented M4). After the approval Claudo may change nothing but its own bookkeeping, or the ship is blocked. Anything a build edited outside every task's scope, and any existing test it rewrote, is committed apart and needs IT's `--note`. |
 
 No Claudo found: the factory still runs, plans are simply not linted and everything builds with the single agent.
 

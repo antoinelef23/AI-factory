@@ -43,6 +43,15 @@ exception_days = 180
 # sees it; an agent-written one is re-prompted with the errors this many times, then blocked.
 spec_lint_retries = 2
 
+[sandbox]
+# Agent builds run in Claudo's hardened container (ROADMAP P1-7): the agent, Claudo's per-task verify and evals,
+# and the factory's test/lint gates. Create it once with Claudo's `bash deploy/sandbox/setup.sh`; the agent in it
+# needs CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`) or ANTHROPIC_API_KEY. `--unsafe-host` on run/approve/
+# promote builds on the host instead, recorded on the item for IT to acknowledge at the ship review.
+image = "lab-agent:latest"
+network = "lab-egress"
+proxy = "http://lab-egress-proxy:8888"
+
 [identity]
 # Who is acting. "none": roles are self-declared (`--as it --by Bob` is trusted, approvals say so). "github": the
 # actor is the account the `gh` CLI is logged in as; it must hold the role in `roles` (IT-owned, like the radar),

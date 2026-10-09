@@ -37,6 +37,15 @@ reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens 
   each with a verbatim quote of the idea (checked; ungrounded or unknown claims dropped); keywords stay the floor,
   failures fall back to them, the technology is still chosen by the radar. Live: the live1 idea (keywords missed
   its database) got `database` and `frontend`, both grounded, $0.017.
+- **P1-7 sandbox by default**: every agent build runs in Claudo's container (`deploy/sandbox/setup.sh`: images, an
+  `--internal` network, a deny-by-default tinyproxy allowing api.anthropic.com, PyPI and npm). Contained: the
+  factory's build agent, Claudo's agents (`LAB_RUNNER=sandbox`) and, new in Claudo 76465c3, the code they write
+  (task verify, `just evals`); the factory's test/lint gates too. Found and fixed on the way: docker mounts a tmpfs
+  `noexec`, so every contained `uv run pytest` failed with EACCES. Live (Docker Desktop 29.8): secret absent, host
+  fs unreachable, LAB mount read-only, no direct internet, PyPI via the proxy, example.com refused (403 Filtered);
+  the fullstack app's real gates (pytest 1 + npm ci + vitest 3) and the worker's (4) pass in the container and the
+  dependencies gate reads the licences it installed; Claudo's real `_run_verify` passes contained, and its
+  secret-absence test fails on the host as the control. The PR body says where the agent's code ran.
 - **P3-8 golden paths**: each template carries a `golden.toml` (capabilities, radar techs, gate overrides); the
   factory picks the one covering the idea's optional needs among those whose techs the radar allows. New:
   `fullstack-react` (FastAPI + React/Vite/TypeScript, pytest + vitest, its tests gate also runs `npm ci` + vitest)
@@ -142,7 +151,8 @@ then applied the plan. Status per item:
 | P2-6 change an existing app | done | `change`/`merge`/`abandon`; branch `factory/<slug>`, fast-forward-only merge by IT; migrations from `drift --open` are runnable; full story tested with an agent that really edits the app (migrate -> approve -> merge -> drift clean); fast-forward rule mutation-checked |
 | Spec structural lint | done | closes the judge's measured blind spot (missing evals table): `lint_spec` + re-prompt loop; 0 false positives on 2 real agent specs; it found a real hole in the offline template (BHV-2 had no eval); coverage rule mutation-checked |
 | README as executable docs | done | tests run the README's offline walkthrough as written, check every command it names exists and every command is documented; found `board` undocumented; mutation-checked |
-| P1-7, P1-10 | open | see Next |
+| P1-7 sandbox by default | done | agent builds, Claudo's verify/evals and the factory's gates run in Claudo's container (internal network + allowlist proxy); MVP+ blocks when it is not ready unless `--unsafe-host` (IT ack); POV/POC falls back to the host with a note (D5); verified live except a billed sandboxed agent build (needs a credential in the container) |
+| P1-10 | open | see Next |
 
 ### Live runs and what they taught (all in scratch copies, not committed)
 
@@ -219,7 +229,8 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 
 ## Not verified
 - The judge enabled during a Claudo-built item (`judge = true`) end to end with real models.
-- Sandbox runner (Docker) on Windows; the bind-mount path form is unit-tested only.
+- A billed agent build INSIDE the sandbox: the container needs CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`) or
+  ANTHROPIC_API_KEY, which only Antoine can create. Everything around it is verified live (below).
 - The billed judge test on the about-endpoint spec (`pytest -m live --live -k edge_case`).
 - `judge_from` with real models. `abandon` and `publish --accept-unverified` against real GitHub.
 
@@ -232,8 +243,11 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   keeps one person from deciding two roles of an item (verified live with the real login). Left: the default is
   still `provider = "none"` (self-declared, labelled so in PRs), and a person with shell access to the factory
   machine can edit roles.toml: keep it under review like the radar.
-- Approval secret is held by the orchestrator process on the host, so a host agent with code execution could read it
-  (Claudo's documented residual M4; the sandbox runner is the fix, ROADMAP P1-7).
+- Approval secret: CLOSED for sandboxed builds (2026-10-09). The agent, Claudo's verify/evals and the factory's
+  gates run in a container that never receives it; measured: a test asserting the secret is absent passes in the
+  sandbox and FAILS on the host (so before this, agent-written tests run by `verify` could read it). Left: an
+  `--unsafe-host` build (IT must acknowledge it), a POV/POC built on the host when Docker is down (noted on the
+  item), and the spec/design agents, which run on the host with read-only tools.
 - Capability detection: keywords plus, since 2026-10-09, an LLM analyst whose claims must quote the idea (live:
   the live1 idea now gets its database, $0.017). The stack is still compiled from the radar.
 - Claudo's two Opus reviews dominate MVP cost (above).
@@ -253,5 +267,6 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   already have the recipe. Same class as J-5, not fixed: it would need a deliberate setup commit on the base.
 
 ## Next steps (in order)
-1. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
+1. Antoine: `claude setup-token`, then `setx CLAUDE_CODE_OAUTH_TOKEN <token>`, then one billed MVP build in the
+   sandbox (smoke first). Claudo's sandbox commit 76465c3 waits for a go to push to `portable`.
 2. More golden paths on demand (the manifest makes adding one a folder + a golden.toml).

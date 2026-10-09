@@ -314,7 +314,7 @@ plan task by task, with planlint, verify, per-task evals and signed approvals.
 | P1-4 | Build = Claudo orchestration | Replace the single build call with `orchestrate` on `apps/<slug>/work/<slug>/` via `run-project`; parallel groups, `verify` per task, eval gate per task |
 | P1-5 | Radar guard inside planlint | A task whose `files_touched` or prompt introduces a forbidden technology fails planlint before any execution |
 | P1-6 | Signed approvals | Factory checkpoints use `approvals.py` (HMAC); the secret lives outside the agent's reach; `approve` writes a signed token, `run` verifies it |
-| P1-7 | Sandbox by default for builds | Use `sandbox_runner.py` (Docker) when Docker is available; host runner only with an explicit `--unsafe-host` flag |
+| P1-7 | Sandbox by default for builds | Use `sandbox_runner.py` (Docker) when Docker is available; host runner only with an explicit `--unsafe-host` flag. **Done 2026-10-09** (D5 applied: required from MVP, host fallback with a note below) |
 | P1-8 | Journal + trajectory guard | Every factory run writes `.runs/journal.jsonl`; `trajectory_guard` becomes a gate from MVP up |
 | P1-9 | Content guard on spec/design | Spec or design substance cannot change after approval without a version bump and a new review |
 | P1-10 | Migrate runner interface | One `AgentRunner` interface shared by factory and Claudo |

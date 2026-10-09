@@ -18,6 +18,7 @@ from factory.guard import check_project
 from factory.identity import GhIdentity, IdentityError, load_roles
 from factory.importer import import_radar
 from factory.radar import MATURITIES, POLICY, RINGS, RadarError, load_radar
+from factory.sandbox import Sandbox
 from factory.workitem import ROLES, Store, WorkItem
 
 
@@ -31,6 +32,11 @@ def _foreman(args: argparse.Namespace, runner_name: str | None = None) -> Forema
     identity, roles = None, None
     if cfg.identity_provider == "github":
         identity, roles = GhIdentity(), load_roles(cfg.roles_path)
+    # Agent builds are sandboxed unless the human explicitly says otherwise (P1-7).
+    unsafe_host = bool(getattr(args, "unsafe_host", False))
+    sandbox = None
+    if not unsafe_host:
+        sandbox = Sandbox(image=cfg.sandbox_image, network=cfg.sandbox_network, proxy=cfg.sandbox_proxy)
     return Foreman(
         cfg,
         radar,
@@ -40,6 +46,8 @@ def _foreman(args: argparse.Namespace, runner_name: str | None = None) -> Forema
         host=host,
         identity=identity,
         roles=roles,
+        sandbox=sandbox,
+        unsafe_host=unsafe_host,
     )
 
 
@@ -383,6 +391,11 @@ def build_parser() -> argparse.ArgumentParser:
     def runner_opt(sp: argparse.ArgumentParser) -> None:
         sp.add_argument(
             "--runner", choices=["offline", "claude"], help="override factory.toml [agent] runner"
+        )
+        sp.add_argument(
+            "--unsafe-host",
+            action="store_true",
+            help="build on the host instead of the sandbox (recorded for IT to acknowledge)",
         )
 
     def role_opt(sp: argparse.ArgumentParser, choices=ROLES) -> None:

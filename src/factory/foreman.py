@@ -72,6 +72,7 @@ from factory.project import (
     sync_merged_base,
 )
 from factory.radar import BLOCK, MATURITIES, Radar, verdict
+from factory.sandbox import Sandbox, SandboxedRunner
 from factory.speclint import lint_spec
 from factory.templates import (
     SPEC_ID,
@@ -122,6 +123,8 @@ class Foreman:
         locker: Callable[[Path], tuple[int, str]] | None = None,
         identity: IdentityProvider | None = None,
         roles: RoleMap | None = None,
+        sandbox: Sandbox | None = None,
+        unsafe_host: bool = False,
     ) -> None:
         self.cfg = cfg
         self.radar = radar
@@ -134,6 +137,9 @@ class Foreman:
         # Who is acting: None = self-declared roles (`--as` / `--by` are trusted); else verified + roles.toml.
         self.identity, self.roles = identity, roles or RoleMap()
         self.locker = locker or lock_dependencies  # `uv lock` for a new app (injectable: tests stay offline)
+        # Where agent-written code runs (P1-7): the sandbox, or the host on an explicit --unsafe-host. The CLI
+        # always passes one of the two; a library caller passing neither runs on the host, unrecorded.
+        self.sandbox, self.unsafe_host = sandbox, unsafe_host
 
     # ------------------------------------------------------------------ intake
     def intake(self, title: str, idea: str, maturity: str = "poc", requester: str = "business") -> WorkItem:
@@ -314,6 +320,11 @@ class Foreman:
                 item.log("waiting", f"{step.role}: {step.summary}")
                 break
             if step.name == "build":
+                refusal = self._containment(item)
+                if refusal:  # not an attempt: nothing ran
+                    item.status, item.feedback = "blocked", refusal
+                    item.log("blocked", refusal[:600])
+                    break
                 builds_this_run += 1
                 item.build_attempts += 1
             handler = getattr(self, f"_do_{step.name}")
@@ -958,7 +969,7 @@ class Foreman:
         if self._uses_claudo(item) and (not item.claudo_cp or item.claudo_rejection):
             return self._build_with_claudo(item, app, where)
         forbidden = [t.name for t in self.radar.techs if verdict(t, item.maturity) == BLOCK]
-        result = self.runner.run(
+        result = self._builder(item).run(
             change_build_prompt(item, forbidden, item.feedback),
             cwd=app,
             model=self.cfg.models.get("build"),
@@ -1135,6 +1146,13 @@ class Foreman:
             "## Gates",
             *([f"- {g}" for g in gates] or ["- (no gate report)"]),
         ]
+        if item.build_where:
+            where = (
+                "sandbox (container, egress allowlist)"
+                if item.build_where == "sandbox"
+                else "host, unsandboxed"
+            )
+            lines += ["", f"Agent code ran in: **{where}**."]
         if review:
             lines += ["", f"## Claudo reviewer\n{review['cp']}: **{review['verdict']}** ({review['report']})"]
         if item.ship_acks:
@@ -1324,6 +1342,11 @@ class Foreman:
             # A first build starts clean. Retries and reworks keep their acks: the commits that caused
             # them are still in the branch history, so IT must still acknowledge them.
             item.ship_acks = []
+        if item.build_where == "host" and self.unsafe_host:
+            self._add_ack(
+                item, "unsafe_host", "built with --unsafe-host: agent code ran on the host, unsandboxed"
+            )
+            item.log("unsafe_host", "agent code runs on the host (--unsafe-host), outside the sandbox")
         if item.kind != "app":
             return self._do_build_change(item)
         app = self.app_dir(item)
@@ -1340,7 +1363,7 @@ class Foreman:
         if self._uses_claudo(item) and (not item.claudo_cp or item.claudo_rejection):
             return self._build_with_claudo(item, app, detail)
         forbidden = [t.name for t in self.radar.techs if verdict(t, item.maturity) == BLOCK]
-        result = self.runner.run(
+        result = self._builder(item).run(
             build_prompt(item, forbidden, item.feedback),
             cwd=app,
             model=self.cfg.models.get("build"),
@@ -1353,6 +1376,47 @@ class Foreman:
             return False, f"{detail}; build agent failed: {result.error}"
         self.store.write(item, "build-summary.md", result.text.strip() + "\n")
         return True, f"{detail}; built by agent (${result.cost_usd:.2f})"
+
+    def _containment(self, item: WorkItem) -> str:
+        """Decide where this build's agent code runs (item.build_where); a refusal when it may not start.
+
+        The sandbox whenever it is ready. Not ready: an MVP or prod build waits (or the human passes
+        --unsafe-host); a POV/POC on a dev machine falls back to the host with a note (ROADMAP D5)."""
+        if self.runner is None:
+            item.build_where = ""
+            return ""
+        if self.sandbox is None:
+            item.build_where = "host"
+            return ""
+        problems = self.sandbox.problems()
+        if not problems:
+            item.build_where = "sandbox"
+            return ""
+        if item.maturity in ("pov", "poc"):
+            item.build_where = "host"
+            note = f"built on the host: the sandbox is not ready ({problems[0]}); required from MVP up"
+            if note not in item.notes:
+                item.notes.append(note)
+            item.log("unsandboxed", note)
+            return ""
+        return (
+            f"the build sandbox is not ready (required for {item.maturity} builds):\n- "
+            + "\n- ".join(problems)
+            + "\nOr rerun with --unsafe-host to build on the host (recorded for IT to acknowledge)."
+        )
+
+    def _builder(self, item: WorkItem) -> ClaudeRunner:
+        """The agent that writes code: the sandboxed one when this build is contained."""
+        assert self.runner is not None
+        if item.build_where == "sandbox" and self.sandbox is not None:
+            return SandboxedRunner(self.sandbox)
+        return self.runner
+
+    def _gate_executor(self, item: WorkItem) -> Executor:
+        """Gate commands run the agent's code: in the sandbox when the agent built it there."""
+        if item.build_where == "sandbox" and self.sandbox is not None:
+            return self.sandbox.executor
+        return self.executor
 
     def _signing_secret(self) -> str:
         """Kept in the per-user state directory, not in the factory tree the build agents work next to."""
@@ -1367,6 +1431,8 @@ class Foreman:
         }
         if self.cfg.claudo_budget_usd:
             env["LAB_BUDGET_USD"] = str(self.cfg.claudo_budget_usd)
+        if item.build_where == "sandbox" and self.sandbox is not None:  # agents AND their verify/evals
+            env.update(self.sandbox.claudo_env())
         return env
 
     def _commit_leftovers(self, item: WorkItem, app: Path) -> None:
@@ -1582,7 +1648,7 @@ class Foreman:
             exceptions=item.active_exceptions(self.today()),
             docs=[app / "work" / item.slug / "design.md"],
             commands={**self.cfg.gate_commands, **golden_gate_commands(app)},
-            executor=self.executor,
+            executor=self._gate_executor(item),
             extra={
                 "immutable": lambda: self._immutability_gate(item),
                 "trajectory": lambda: self._trajectory_gate(item),

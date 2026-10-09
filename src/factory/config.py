@@ -51,6 +51,9 @@ class Config:
     )
     claudo_timeout: int = 3600  # [engine] build_timeout: seconds per orchestrator run
     claudo_budget_usd: float = 0.0  # [engine] budget_usd: per-run spend cap passed to Claudo (0 = none)
+    sandbox_image: str = "lab-agent:latest"  # [sandbox] image: Claudo's deploy/sandbox/Dockerfile.agent
+    sandbox_network: str = "lab-egress"  # [sandbox] network: internal; the proxy is the only way out
+    sandbox_proxy: str = "http://lab-egress-proxy:8888"  # [sandbox] proxy: the egress allowlist proxy
     judge_enabled: bool = False
     judge_from: str = ""  # [agent] judge_from: judge automatically from this maturity up ("" = off)
     capability_analyst: bool = True  # [agent] capability_analyst: LLM reads capabilities (P3-9)
@@ -118,6 +121,9 @@ def load_config(root: Path) -> Config:
         spec_lint_retries=max(0, int(data.get("policy", {}).get("spec_lint_retries", 2))),
         claudo_timeout=max(60, int(data.get("engine", {}).get("build_timeout", 3600))),
         claudo_budget_usd=max(0.0, float(data.get("engine", {}).get("budget_usd", 0))),
+        sandbox_image=str(data.get("sandbox", {}).get("image", "lab-agent:latest")),
+        sandbox_network=str(data.get("sandbox", {}).get("network", "lab-egress")),
+        sandbox_proxy=str(data.get("sandbox", {}).get("proxy", "http://lab-egress-proxy:8888")),
         models=dict(agent.get("models", {})),
         gate_commands=dict(gates.get("commands", {})),
     )

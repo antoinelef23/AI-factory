@@ -101,6 +101,9 @@ class WorkItem:
     # first reopen that checkpoint in Claudo's state
     claudo_cp_consumed: bool = False
     claudo_rejection: dict = field(default_factory=dict)  # {cp, reason, by}: IT rejected, rework pending
+    build_where: str = (
+        ""  # where the agent's code ran for the current build: "sandbox" | "host" | "" (no agent)
+    )
 
     @property
     def step(self) -> Step:
