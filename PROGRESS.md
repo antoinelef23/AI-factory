@@ -33,7 +33,10 @@ Scratch factory `live7` from frozen snapshots; `budget_usd = 3` per orchestrator
 - **V-2:** published as PRIVATE `antoinelef23/v2-app-ping-service` (the old `app-ping-service` is kept until
   Antoine deletes it, hence the `v2-app-` prefix) and PR #1 opened: body with gates, PASS, approvals, cost; no
   approval token among the files. The old PR #1 of `app-ping-service` was closed by `factory abandon` (comment +
-  branch deleted): C8 verified on real GitHub. Waiting: Antoine merges, then `factory sync about-endpoint`.
+  branch deleted): C8 verified on real GitHub. On 2026-10-09 Antoine squash-merged PR #1 on GitHub: `factory
+  sync about-endpoint` fast-forwarded the local app (local main = origin/main, change branch gone, 10 tests
+  pass) and read the PR's CI back as `pass` (the golden path's workflow); `factory drift`: 1 compliant, 0
+  drifted. **V-2 done**: delivery is verified end to end on real GitHub. The old `app-ping-service` is deleted.
 - Earlier attempts in `live6` ($1.08) stopped on two factory contradictions, both fixed: the judge rubric demanded an
   edge case S-1 forbids; the spec mandated an exact `/health` body IT's golden path does not return (Antoine: subset).
 - **Found and fixed live:** Claudo printed "waiting" before honouring a pending rejection, and the factory stops the
@@ -180,7 +183,6 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 ## Not verified
 - The judge enabled during a Claudo-built item (`judge = true`) end to end with real models.
 - Sandbox runner (Docker) on Windows; the bind-mount path form is unit-tested only.
-- `sync` after a REAL merge on GitHub: PR #1 of `v2-app-ping-service` is open, waiting for Antoine's merge.
 - The billed judge test on the about-endpoint spec (`pytest -m live --live -k edge_case`).
 - `judge_from` with real models. `abandon` and `publish --accept-unverified` against real GitHub.
 
@@ -209,11 +211,8 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   already have the recipe. Same class as J-5, not fixed: it would need a deliberate setup commit on the base.
 
 ## Next steps (in order)
-1. Antoine merges PR #1 of `v2-app-ping-service` on GitHub (squash), then `factory sync about-endpoint` and
-   `factory drift` close V-2. Delete `app-ping-service` when convenient (`! gh auth refresh -h github.com -s
-   delete_repo` first).
-2. Fix the three findings of the live run above (plan restore without an agent, invented KPIs, judge context for
+1. Fix the three findings of the live run above (plan restore without an agent, invented KPIs, judge context for
    changes).
-3. The judge is noisy: several runs or a majority vote before trusting one verdict.
-4. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
-5. P2-5 GitHub issue intake; P3-3 version constraints / P3-4 licence policy from lockfiles; P3-8 more golden paths.
+2. The judge is noisy: several runs or a majority vote before trusting one verdict.
+3. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
+4. P2-5 GitHub issue intake; P3-3 version constraints / P3-4 licence policy from lockfiles; P3-8 more golden paths.
