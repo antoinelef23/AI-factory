@@ -92,8 +92,8 @@ from factory.workitem import ROLES, STEP_BY_NAME, STEPS, Store, WorkItem
 
 FIX_AFTER_REVIEW_COMMIT = """fix({slug}): targeted fix after a failed factory gate
 
-Why: Claudo built the plan and its reviewer passed, then a factory gate failed; one agent fixed what the gate
-reported. Committed apart so IT sees exactly what changed after Claudo's review.
+Why: Claudo built the plan and its reviewer ran, then a factory gate failed; one agent fixed what the gate
+reported. Committed apart so IT sees exactly what changed after Claudo's review, which did not see it.
 
 Artifacts: {files}
 Run: auto

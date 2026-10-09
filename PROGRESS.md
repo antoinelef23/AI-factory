@@ -46,6 +46,14 @@ reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens 
   the fullstack app's real gates (pytest 1 + npm ci + vitest 3) and the worker's (4) pass in the container and the
   dependencies gate reads the licences it installed; Claudo's real `_run_verify` passes contained, and its
   secret-absence test fails on the host as the control. The PR body says where the agent's code ran.
+- **First billed build in the sandbox** (2026-10-09, scratch live8, `utc-clock` MVP, $2.17 in all; smoke first:
+  one sandboxed call, $0.0006). Spec, design and plan on the host; Claudo's 3 tasks, its Opus reviewer, the fix
+  agent and all gates in containers whose only traffic was api.anthropic.com through the proxy. It found two
+  bugs, both fixed: (1) from a Windows host every mounted file is 0777 and ruff 0.16 enables EXE rules by
+  default, so the lint gate failed on every file, unfixably (now: checks run through `lab-ws` on a copy with
+  git's modes, Claudo ca576da); (2) a targeted fix after Claudo's run was never committed, so `clean_tree` failed
+  every retry (now its own commit + a `fixed_after_review` ack, pre-existing bug). Result: 8/8 gates pass; the
+  reviewer's BLOCK (9 real ruff 0.16 lint errors) predates the fix commit that cleared exactly those 9.
 - **P3-8 golden paths**: each template carries a `golden.toml` (capabilities, radar techs, gate overrides); the
   factory picks the one covering the idea's optional needs among those whose techs the radar allows. New:
   `fullstack-react` (FastAPI + React/Vite/TypeScript, pytest + vitest, its tests gate also runs `npm ci` + vitest)
@@ -151,7 +159,7 @@ then applied the plan. Status per item:
 | P2-6 change an existing app | done | `change`/`merge`/`abandon`; branch `factory/<slug>`, fast-forward-only merge by IT; migrations from `drift --open` are runnable; full story tested with an agent that really edits the app (migrate -> approve -> merge -> drift clean); fast-forward rule mutation-checked |
 | Spec structural lint | done | closes the judge's measured blind spot (missing evals table): `lint_spec` + re-prompt loop; 0 false positives on 2 real agent specs; it found a real hole in the offline template (BHV-2 had no eval); coverage rule mutation-checked |
 | README as executable docs | done | tests run the README's offline walkthrough as written, check every command it names exists and every command is documented; found `board` undocumented; mutation-checked |
-| P1-7 sandbox by default | done | agent builds, Claudo's verify/evals and the factory's gates run in Claudo's container (internal network + allowlist proxy); MVP+ blocks when it is not ready unless `--unsafe-host` (IT ack); POV/POC falls back to the host with a note (D5); verified live except a billed sandboxed agent build (needs a credential in the container) |
+| P1-7 sandbox by default | done | agent builds, Claudo's verify/evals and the factory's gates run in Claudo's container (internal network + allowlist proxy); MVP+ blocks when it is not ready unless `--unsafe-host` (IT ack); POV/POC falls back to the host with a note (D5); verified live, including a billed MVP build in the sandbox (below) |
 | P1-10 | open | see Next |
 
 ### Live runs and what they taught (all in scratch copies, not committed)
@@ -229,8 +237,6 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 
 ## Not verified
 - The judge enabled during a Claudo-built item (`judge = true`) end to end with real models.
-- A billed agent build INSIDE the sandbox: the container needs CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`) or
-  ANTHROPIC_API_KEY, which only Antoine can create. Everything around it is verified live (below).
 - The billed judge test on the about-endpoint spec (`pytest -m live --live -k edge_case`).
 - `judge_from` with real models. `abandon` and `publish --accept-unverified` against real GitHub.
 
@@ -267,6 +273,7 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   already have the recipe. Same class as J-5, not fixed: it would need a deliberate setup commit on the base.
 
 ## Next steps (in order)
-1. Antoine: `claude setup-token`, then `setx CLAUDE_CODE_OAUTH_TOKEN <token>`, then one billed MVP build in the
-   sandbox (smoke first). Claudo's sandbox commit 76465c3 waits for a go to push to `portable`.
+1. Antoine: decide the live item `utc-clock` (scratch live8, at IT's ship review, reviewer BLOCK made stale by the
+   targeted fix, `fixed_after_review` needs a note). Claudo ca576da waits for a go to push to `portable`.
+   Revoke the sandbox token that was pasted into the session and make a new one.
 2. More golden paths on demand (the manifest makes adding one a folder + a golden.toml).
