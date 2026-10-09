@@ -126,8 +126,21 @@ def foreman(factory_root: Path, executor: FakeExecutor) -> Foreman:
         Store(cfg.work_dir),
         runner=None,
         executor=executor,
-        locker=lambda app: (0, "not locked in tests"),  # no network, no uv
+        locker=stub_lock,  # no network, no uv
     )
+
+
+def stub_lock(app: Path) -> tuple[int, str]:
+    """`uv lock` without the network: an empty lockfile, enough for the gates to see the app is pinned."""
+    if (app / "pyproject.toml").is_file() and not (app / "uv.lock").exists():
+        (app / "uv.lock").write_text('version = 1\nrequires-python = ">=3.12"\n', encoding="utf-8")
+    return 0, "stub lock in tests"
+
+
+@pytest.fixture(autouse=True)
+def _no_real_uv_lock(monkeypatch):
+    """Foremen the CLI builds (offline runs, the README walkthrough) lock with the stub too."""
+    monkeypatch.setattr("factory.foreman.lock_dependencies", stub_lock)
 
 
 def pytest_addoption(parser):

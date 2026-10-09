@@ -5,3 +5,10 @@ __pycache__/
 .ruff_cache/
 dist/
 .factory/
+
+# The factory's runtime state and the apps it builds are not part of the factory's source (each app is its
+# own git repository). Renaming work_dir / apps_dir in factory.toml means updating these lines and
+# pyproject.toml [tool.ruff] extend-exclude too.
+work/
+apps/
+radar.imported.toml

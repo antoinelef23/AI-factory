@@ -59,11 +59,11 @@ def test_the_lockfile_is_made_with_the_scaffold_only_when_an_agent_builds(forema
     assert any("uv lock failed (1): resolution failed" in h["detail"] for h in item.history)
 
 
-def test_an_offline_build_commits_the_scaffold_without_locking(foreman):
-    foreman.locker = lambda app: (_ for _ in ()).throw(AssertionError("offline builds never lock"))
+def test_an_offline_build_also_commits_its_lockfile_with_the_scaffold(foreman):
     item = foreman.run(foreman.intake("X", "an api", "poc"))
     item = foreman.approve(foreman.approve(item, "business"), "owner")
-    assert log(foreman.app_dir(item)) == ["chore: scaffold from the IT golden path"]
+    app = foreman.app_dir(item)
+    assert log(app) == ["chore: scaffold from the IT golden path"] and (app / "uv.lock").is_file()
 
 
 def test_a_fix_agent_that_changes_nothing_after_claudo_commits_nothing(foreman):

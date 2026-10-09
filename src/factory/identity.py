@@ -89,8 +89,14 @@ def load_roles(path: Path) -> RoleMap:
     except tomllib.TOMLDecodeError as e:
         raise IdentityError(f"{path}: {e}") from e
     raw = data.get("roles", {})
+    if not isinstance(raw, dict):
+        raise IdentityError(f"{path}: [roles] must be a table of role = [logins]")
     problems = [f"unknown role {r!r}" for r in raw if r not in ROLE_NAMES]
-    problems += [f"{r}: expected a list of logins" for r, v in raw.items() if not isinstance(v, list)]
+    problems += [
+        f"{r}: expected a list of logins"
+        for r, v in raw.items()
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v)
+    ]
     if problems:
         raise IdentityError(f"{path}: " + "; ".join(problems))
     return RoleMap({role: [str(x) for x in raw.get(role, [])] for role in ROLE_NAMES})

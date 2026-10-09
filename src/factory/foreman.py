@@ -464,6 +464,14 @@ class Foreman:
         """Separation of duties: one person never decides checkpoints for two different roles of an item."""
         if not self.cfg.four_eyes or self.identity is None:
             return
+        unproven = next((a for a in item.approvals if a.get("role") != role and not a.get("verified")), None)
+        if unproven:  # recorded before identity was on: nobody can say who really decided it (A117)
+            who_then = f"{unproven['role']} {unproven.get('by', '?')}"
+            raise FactoryError(
+                f"four-eyes: the {unproven['stage']} approval ({who_then}) was self-declared, so separation "
+                "of duties cannot be proven: reject back to that checkpoint so it is decided again with a "
+                "verified identity"
+            )
         other = next(
             (a for a in item.approvals if a.get("by", "").lower() == who.lower() and a.get("role") != role),
             None,
@@ -1511,12 +1519,12 @@ class Foreman:
         if not (app / ".git").exists():
             # A new app is a git project BEFORE any agent touches it: its .git is the factory's (mounted
             # read-only in the sandbox), and every gate and approval judges a commit, never a loose tree.
-            if self.runner is not None:  # the lockfile is part of the scaffold (no uv.lock scope drift later)
-                rc, out = self.locker(app)
-                item.log(
-                    "lock",
-                    "uv.lock created with the scaffold" if rc == 0 else f"uv lock failed ({rc}): {out}",
-                )
+            # The lockfile is part of the scaffold: what ships is pinned (the dependencies gate refuses an app
+            # without one: A138), and no task's first `uv run` leaves an untracked uv.lock behind.
+            rc, out = self.locker(app)
+            item.log(
+                "lock", "uv.lock created with the scaffold" if rc == 0 else f"uv lock failed ({rc}): {out}"
+            )
             prepare_project(app)
         if self.runner is None:
             return True, f"{detail}; offline build (scaffold only, no agent)"

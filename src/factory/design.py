@@ -365,21 +365,46 @@ class GoldenPath:
     folder: str = ""  # the folder under golden_paths/ (the manifest's `name` may differ: audit A97)
 
 
+class GoldenPathError(ValueError):
+    """An IT golden path manifest the factory cannot use: named, with what is wrong (audit A96)."""
+
+
 def load_golden_paths(root: Path) -> list[GoldenPath]:
-    """Every golden path with a `golden.toml` manifest under `root` (IT's templates)."""
+    """Every golden path with a `golden.toml` manifest under `root` (IT's templates). A malformed manifest
+    is a GoldenPathError naming the file, never a traceback nor a template that silently disappears."""
     import tomllib
 
-    found = []
+    found, known = [], set(BASE_CAPABILITIES) | set(OPTIONAL_CAPABILITIES)
     for manifest in sorted(root.glob("*/golden.toml")):
-        data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        try:
+            data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+            raise GoldenPathError(f"{manifest}: {e}") from e
+        caps, techs, priority = data.get("capabilities", []), data.get("techs", []), data.get("priority", 0)
+        problems = []
+        if not isinstance(caps, list) or not all(isinstance(c, str) for c in caps):
+            problems.append("capabilities must be a list of names")
+        elif set(caps) - known:
+            problems.append(f"unknown capabilities {sorted(set(caps) - known)}")
+        if not isinstance(techs, list) or not all(isinstance(t, str) for t in techs):
+            problems.append("techs must be a list of radar ids")
+        if not isinstance(priority, int) or isinstance(priority, bool):
+            problems.append(f"priority = {priority!r} must be an integer")
+        commands = (
+            data.get("gates", {}).get("commands", {}) if isinstance(data.get("gates", {}), dict) else None
+        )
+        if not isinstance(commands, dict):
+            problems.append("[gates.commands] must be a table")
+        if problems:
+            raise GoldenPathError(f"{manifest}: " + "; ".join(problems))
         found.append(
             GoldenPath(
                 name=str(data.get("name") or manifest.parent.name),
                 description=str(data.get("description", "")),
-                capabilities=tuple(data.get("capabilities", [])),
-                techs=tuple(data.get("techs", [])),
-                priority=int(data.get("priority", 0)),
-                gate_commands=dict(data.get("gates", {}).get("commands", {})),
+                capabilities=tuple(caps),
+                techs=tuple(techs),
+                priority=priority,
+                gate_commands=dict(commands),
                 folder=manifest.parent.name,
             )
         )
@@ -395,8 +420,10 @@ def pick_golden_path(
     needed_optional = set(capabilities) & set(OPTIONAL_CAPABILITIES)
     eligible = []
     for gp in paths:
-        techs = [radar.get(t) for t in gp.techs]
-        if any(t is None or verdict(t, maturity) == BLOCK for t in techs):
+        unknown = [t for t in gp.techs if radar.get(t) is None]
+        if unknown:  # a typo would make the template vanish without a word (A96)
+            raise GoldenPathError(f"golden path {gp.folder or gp.name}: techs {unknown} are not on the radar")
+        if any(verdict(radar.get(t), maturity) == BLOCK for t in gp.techs):
             continue
         extra = set(gp.capabilities) & set(OPTIONAL_CAPABILITIES) - needed_optional
         if extra:

@@ -126,10 +126,17 @@ def test_a_lock_without_an_environment_cannot_be_checked_for_licences(tmp_path, 
     ]
 
 
-def test_the_gate_is_not_applicable_without_a_lockfile(tmp_path, radar):
+def test_a_manifest_without_its_lockfile_fails_the_gate(tmp_path, radar):
+    """Nothing pins what ships without a lockfile (audit A138): it used to read as "not applicable"."""
+    assert dependencies_gate(tmp_path, radar).ok  # no manifest at all: nothing to pin
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "package.json").write_text("{}", encoding="utf-8")
     result = dependencies_gate(tmp_path, radar)
-    assert result.ok and "not applicable" in result.detail
-    app = make_app(tmp_path, {"fastapi": "0.100"}, {})
+    assert not result.ok and "pyproject.toml has no uv.lock" in result.detail
+    assert "web/package.json has no package-lock.json" in result.detail
+    (tmp_path / "locked").mkdir()
+    app = make_app(tmp_path / "locked", {"fastapi": "0.100"}, {})
     assert not dependencies_gate(app, radar).ok
 
 

@@ -149,7 +149,9 @@ def test_config_rejects_nonsense_retry_counts(factory_root, retries):
         encoding="utf-8",
     )
     if isinstance(retries, str):
-        with pytest.raises(ValueError):
+        from factory.config import ConfigError
+
+        with pytest.raises(ConfigError, match="plan_lint_retries = 'x' must be a int"):
             load_config(factory_root)
     else:
         assert load_config(factory_root).plan_lint_retries == 0  # clamped, never negative

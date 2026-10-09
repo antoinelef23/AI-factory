@@ -98,6 +98,44 @@ def _refuse_an_apps_config(found: Path) -> None:
             )
 
 
+BUILTIN_GATES = {"radar", "secrets", "dependencies", "immutable", "trajectory", "clean_tree"}
+
+
+class _Reader:
+    """Typed access to factory.toml: a wrong type is a ConfigError naming the key, never a traceback nor a
+    silent misreading (`judge = "false"` is truthy; a string gate list is a list of characters: A92)."""
+
+    def __init__(self, data: dict, path: Path) -> None:
+        self.data, self.path = data, path
+
+    def table(self, name: str) -> dict:
+        value = self.data.get(name, {})
+        if not isinstance(value, dict):
+            raise ConfigError(f"{self.path}: [{name}] must be a table")
+        return value
+
+    def get(self, section: str, key: str, kind: type, default):
+        value = self.table(section).get(key, default)
+        valid = (
+            isinstance(value, bool)
+            if kind is bool
+            else isinstance(value, (int, float)) and not isinstance(value, bool)
+            if kind is float
+            else isinstance(value, kind) and not isinstance(value, bool)
+        )
+        if value is None and default is None:
+            return None
+        if not valid:
+            raise ConfigError(f"{self.path}: [{section}] {key} = {value!r} must be a {kind.__name__}")
+        return value
+
+    def strings(self, section: str, key: str) -> dict[str, str]:
+        value = self.table(section).get(key, {})
+        if not isinstance(value, dict) or not all(isinstance(v, str) for v in value.values()):
+            raise ConfigError(f"{self.path}: [{section}.{key}] must map names to strings")
+        return dict(value)
+
+
 def load_config(root: Path) -> Config:
     path = root / CONFIG_NAME
     try:
@@ -107,48 +145,60 @@ def load_config(root: Path) -> Config:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from e
 
-    f = data.get("factory", {})
-    agent = data.get("agent", {})
-    gates = data.get("gates", {})
+    r = _Reader(data, path)
+    gates = r.table("gates")
+    thinking = r.get("agent", "judge_thinking_tokens", int, None)
     cfg = Config(
         root=root,
-        name=f.get("name", "AI Software Factory"),
-        radar_path=root / f.get("radar", "radar.toml"),
-        work_dir=root / f.get("work_dir", "work"),
-        apps_dir=root / f.get("apps_dir", "apps"),
-        golden_paths_dir=root / f.get("golden_paths_dir", "golden_paths"),
-        runner=agent.get("runner", "offline"),
-        max_turns_build=int(agent.get("max_turns_build", 40)),
-        max_build_attempts=max(1, int(agent.get("max_build_attempts", 3))),
-        judge_enabled=bool(agent.get("judge", False)),
-        judge_from=str(agent.get("judge_from", "")),
-        capability_analyst=bool(agent.get("capability_analyst", True)),
-        judge_votes=max(1, int(agent.get("judge_votes", 1))),
-        judge_thinking_tokens=agent.get("judge_thinking_tokens"),
-        claudo_home=data.get("engine", {}).get("claudo") or None,
-        plan_lint_retries=max(0, int(data.get("engine", {}).get("plan_lint_retries", 2))),
-        identity_provider=data.get("identity", {}).get("provider", "none"),
-        roles_path=root / data.get("identity", {}).get("roles", "roles.toml"),
-        four_eyes=bool(data.get("identity", {}).get("four_eyes", False)),
-        intake_repo=str(data.get("intake", {}).get("repo", "")),
-        intake_label=str(data.get("intake", {}).get("label", "factory")),
-        delivery_provider=data.get("delivery", {}).get("provider", "none"),
-        delivery_owner=data.get("delivery", {}).get("owner", ""),
-        repo_prefix=data.get("delivery", {}).get("repo_prefix", "app-"),
-        claudo_build_from=data.get("engine", {}).get("build_from", "mvp"),
-        exception_days=max(0, int(data.get("policy", {}).get("exception_days", 180))),
-        spec_lint_retries=max(0, int(data.get("policy", {}).get("spec_lint_retries", 2))),
-        claudo_timeout=max(60, int(data.get("engine", {}).get("build_timeout", 3600))),
-        claudo_budget_usd=max(0.0, float(data.get("engine", {}).get("budget_usd", 0))),
-        sandbox_image=str(data.get("sandbox", {}).get("image", "lab-agent:latest")),
-        sandbox_network=str(data.get("sandbox", {}).get("network", "lab-egress")),
-        sandbox_proxy=str(data.get("sandbox", {}).get("proxy", "http://lab-egress-proxy:8888")),
-        models=dict(agent.get("models", {})),
-        gate_commands=dict(gates.get("commands", {})),
+        name=r.get("factory", "name", str, "AI Software Factory"),
+        radar_path=root / r.get("factory", "radar", str, "radar.toml"),
+        work_dir=root / r.get("factory", "work_dir", str, "work"),
+        apps_dir=root / r.get("factory", "apps_dir", str, "apps"),
+        golden_paths_dir=root / r.get("factory", "golden_paths_dir", str, "golden_paths"),
+        runner=r.get("agent", "runner", str, "offline"),
+        max_turns_build=max(1, r.get("agent", "max_turns_build", int, 40)),
+        max_build_attempts=max(1, r.get("agent", "max_build_attempts", int, 3)),
+        judge_enabled=r.get("agent", "judge", bool, False),
+        judge_from=r.get("agent", "judge_from", str, ""),
+        capability_analyst=r.get("agent", "capability_analyst", bool, True),
+        judge_votes=max(1, r.get("agent", "judge_votes", int, 1)),
+        judge_thinking_tokens=None if thinking is None else max(0, thinking),
+        claudo_home=r.get("engine", "claudo", str, "") or None,
+        plan_lint_retries=max(0, r.get("engine", "plan_lint_retries", int, 2)),
+        identity_provider=r.get("identity", "provider", str, "none"),
+        roles_path=root / r.get("identity", "roles", str, "roles.toml"),
+        four_eyes=r.get("identity", "four_eyes", bool, False),
+        intake_repo=r.get("intake", "repo", str, ""),
+        intake_label=r.get("intake", "label", str, "factory"),
+        delivery_provider=r.get("delivery", "provider", str, "none"),
+        delivery_owner=r.get("delivery", "owner", str, ""),
+        repo_prefix=r.get("delivery", "repo_prefix", str, "app-"),
+        claudo_build_from=r.get("engine", "build_from", str, "mvp"),
+        exception_days=max(0, r.get("policy", "exception_days", int, 180)),
+        spec_lint_retries=max(0, r.get("policy", "spec_lint_retries", int, 2)),
+        claudo_timeout=max(60, r.get("engine", "build_timeout", int, 3600)),
+        claudo_budget_usd=max(0.0, float(r.get("engine", "budget_usd", float, 0))),
+        sandbox_image=r.get("sandbox", "image", str, "lab-agent:latest"),
+        sandbox_network=r.get("sandbox", "network", str, "lab-egress"),
+        sandbox_proxy=r.get("sandbox", "proxy", str, "http://lab-egress-proxy:8888"),
+        models=r.strings("agent", "models"),
+        gate_commands=r.strings("gates", "commands"),
     )
     for maturity in DEFAULT_GATES:
         if maturity in gates:
-            cfg.gates[maturity] = list(gates[maturity])
+            names = gates[maturity]
+            if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+                raise ConfigError(f"{path}: [gates] {maturity} must be a list of gate names")
+            unknown = [n for n in names if n not in BUILTIN_GATES and n not in cfg.gate_commands]
+            if unknown:
+                raise ConfigError(
+                    f"{path}: [gates] {maturity}: {unknown} are neither built-in nor in [gates.commands]"
+                )
+            cfg.gates[maturity] = list(names)
+    if cfg.four_eyes and cfg.identity_provider == "none":  # four eyes need verified identities (A116, A118)
+        raise ConfigError(
+            f'{path}: [identity] four_eyes needs provider = "github": self-declared names prove nothing'
+        )
     if cfg.judge_from and cfg.judge_from not in DEFAULT_GATES:
         raise ConfigError(
             f"{path}: [agent] judge_from = {cfg.judge_from!r}, expected '' or one of {sorted(DEFAULT_GATES)}"

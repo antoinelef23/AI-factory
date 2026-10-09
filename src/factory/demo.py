@@ -33,7 +33,9 @@ def _foreman(root: Path, with_tests: bool) -> Foreman:
     cfg = load_config(root)
     if not with_tests:  # radar + secrets gates only: no uv, no network, no billing
         cfg.gates = {m: [g for g in gs if g in ("radar", "secrets")] for m, gs in cfg.gates.items()}
-    return Foreman(cfg, load_radar(cfg.radar_path), Store(cfg.work_dir), runner=None)
+    # Without the tests gate the demo needs no lockfile (no dependencies gate either): it stays offline.
+    locker = None if with_tests else (lambda app: (0, "the demo does not lock"))
+    return Foreman(cfg, load_radar(cfg.radar_path), Store(cfg.work_dir), runner=None, locker=locker)
 
 
 def run_demo(source: Path, say: Say = print, with_tests: bool = False) -> None:

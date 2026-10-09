@@ -122,9 +122,8 @@ def radar_gate(
 
 
 def dependencies_gate(app_dir: Path, radar: Radar) -> GateResult:
-    """Versions locked in uv.lock against the radar's constraints; installed licences against its policy."""
-    if not (app_dir / "uv.lock").is_file():
-        return GateResult("dependencies", True, "not applicable: the app has no uv.lock")
+    """Versions locked in uv.lock and package-lock.json against the radar's constraints; installed licences
+    against its policy. A manifest without its lockfile fails: nothing pins what ships (A138)."""
     problems = check_dependencies(app_dir, radar)
     detail = "\n".join(problems) or "locked versions and licences comply with the radar"
     return GateResult("dependencies", not problems, detail)

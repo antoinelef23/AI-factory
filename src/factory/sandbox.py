@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from factory.agents import AgentResult, claude_argv, parse_claude_json, timeout_error
 
@@ -47,7 +48,7 @@ class Sandbox:
     image: str = "lab-agent:latest"
     network: str = "lab-egress"
     proxy: str = "http://lab-egress-proxy:8888"
-    proxy_container: str = "lab-egress-proxy"
+    proxy_container: str = ""  # "" = the host of `proxy`: the container whose health is checked (A158)
     memory: str = "4g"
     pids: int = 1024
     timeout: int = 1800
@@ -55,6 +56,10 @@ class Sandbox:
     # From a Windows host the bind mount shows every file as 0777 (chmod is a no-op): checks then run through
     # the image's `lab-ws`, on a copy carrying git's file modes (else ruff's EXE rules flag every file).
     git_modes: bool = os.name == "nt"
+
+    def __post_init__(self) -> None:
+        if not self.proxy_container:
+            self.proxy_container = urlparse(self.proxy).hostname or "lab-egress-proxy"
 
     # ------------------------------------------------------------------ readiness
     def problems(self, *, need_credential: bool = True) -> list[str]:
