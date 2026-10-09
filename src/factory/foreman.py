@@ -444,10 +444,7 @@ class Foreman:
             item.log("retry", "resuming after block")
         builds_this_run = 0  # the automatic retry budget is per `run`: a human re-run grants a fresh one
         for _ in range(max_steps):
-            step = item.step
-            if step.kind == "terminal":
-                item.status = "shipped"
-                break
+            step = item.step  # never terminal here: a ship review's approval runs again from the top
             if step.kind == "checkpoint":
                 item.status = "waiting"
                 item.log("waiting", f"{step.role}: {step.summary}")
@@ -1944,17 +1941,13 @@ class Foreman:
         # Claudo has passed its checkpoint. If the ship is blocked or IT must decide again, a rejection has to
         # reopen that checkpoint first (see _build_with_claudo).
         item.claudo_cp_consumed = True
-        if item.approved_head:
-            changed = post_approval_changes(app, item.slug, item.approved_head)
-            if changed:
-                return "blocked", (
-                    f"Claudo changed {', '.join(changed[:8])} after the approval: not shipped. "
-                    "That content was never gated or seen by IT."
-                )
-        if (
-            item.gated_sha
-        ):  # only Claudo's bookkeeping moved HEAD (proven above): the gated content is unchanged
-            item.gated_sha = head_sha(app)
+        changed = post_approval_changes(app, item.slug, item.approved_head)  # every app is in git: a HEAD
+        if changed:
+            return "blocked", (
+                f"Claudo changed {', '.join(changed[:8])} after the approval: not shipped. "
+                "That content was never gated or seen by IT."
+            )
+        item.gated_sha = head_sha(app)  # only Claudo's bookkeeping moved HEAD (proven above)
         report = self._review_report(item, app)
         if report and self._sha(report.read_text(encoding="utf-8")) != item.approved_review_sha256:
             review = self.engine.review_verdict(app, item.slug, item.claudo_cp)

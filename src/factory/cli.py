@@ -166,9 +166,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print("`factory drift` will judge it.")
     else:
         print(f"{item.slug}: pull request {item.pr_state} ({item.pr_url})")
-    if item.ci_state:
-        failing = f": {', '.join(item.ci_failed)}" if item.ci_failed else ""
-        print(f"  CI: {item.ci_state}{failing}")
+    failing = f": {', '.join(item.ci_failed)}" if item.ci_failed else ""
+    print(f"  CI: {item.ci_state}{failing}")  # sync always reads it back (none when no check ran)
     return 0
 
 

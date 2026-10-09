@@ -220,9 +220,7 @@ def _ignore_runtime_state(app: Path) -> bool:
     Local on purpose: it never changes the app's tree, so the factory never dirties an existing app (a
     .gitignore edit would land in a baseline commit on the base branch, or show up as scope drift). New apps
     also carry the patterns in the golden path's own .gitignore. True if the exclude file changed."""
-    path = Path(_git(app, "rev-parse", "--git-path", "info/exclude"))
-    if not path.is_absolute():
-        path = app / path
+    path = app / _git(app, "rev-parse", "--git-path", "info/exclude")  # relative, or absolute (kept as is)
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = path.read_text(encoding="utf-8") if path.is_file() else ""
     have = {ln.strip() for ln in existing.splitlines()}

@@ -12,3 +12,5 @@ dist/
 work/
 apps/
 radar.imported.toml
+.coverage
+.coverage.*

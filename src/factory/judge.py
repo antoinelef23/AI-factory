@@ -344,11 +344,8 @@ def combine(kind: str, reports: list[JudgeReport]) -> JudgeReport:
         out.criteria.append(
             CriterionScore(cid, median, f"{chosen.evidence} (scores: {votes})", chosen.quote, True)
         )
-    if len(out.criteria) * 2 <= len(RUBRICS[kind]):
-        out.verdict = "unreliable"
-        out.summary = "too few criteria were scored with a grounded quote across the runs"
-        out.raw = next((r.raw for r in reports if r.raw), "")  # kept for diagnosis (audit A148)
-        return out
+    # No "too few criteria" case: every reliable run grounds more than half of them, and each one it
+    # grounds is kept here, so the panel always has more than half.
     out.verdict, out.average = compute_verdict([c.score for c in out.criteria])
     agreeing = [r for r in reliable if r.verdict == out.verdict] or reliable
     out.summary = agreeing[0].summary

@@ -18,12 +18,27 @@ build-backend = "hatchling.build"
 packages = ["src/factory"]
 
 [dependency-groups]
-dev = ["pytest", "ruff"]
+dev = [
+    "pytest",
+    "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
+    "ruff",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 markers = ["live: calls a paid model; opt-in with --live (just calibrate)"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/factory", "scripts"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+exclude_also = ['if __name__ == "__main__":']
 
 [tool.ruff]
 line-length = 110

@@ -4,11 +4,12 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 default:
     @just --list
 
-# THE verification command: lint + format check + tests (offline, free, seconds).
+# THE verification command: lint + format check + tests with 100% line and branch coverage (offline, free,
+# about two minutes on 16 cores: the tests run in parallel).
 check:
     uv run ruff check .
     uv run ruff format --check .
-    uv run pytest -q
+    uv run pytest -q -n auto --cov --cov-report=term-missing:skip-covered --cov-fail-under=100
 
 # Auto-fix lint and format.
 fmt:
