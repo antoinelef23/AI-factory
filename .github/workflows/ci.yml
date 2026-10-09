@@ -16,3 +16,15 @@ jobs:
       - uses: extractions/setup-just@v2
       - run: uv sync --locked
       - run: just check
+  # The golden paths themselves: each one scaffolded through the factory, then locked, linted, tested (backend
+  # and frontend) and built as the image an app ships (audit A9).
+  golden-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: uv sync --locked
+      - run: uv run python scripts/golden_paths_ci.py --docker

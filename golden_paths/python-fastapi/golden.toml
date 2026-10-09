@@ -5,5 +5,5 @@
 name = "python-fastapi"
 description = "HTTP API: FastAPI, pytest, ruff"
 capabilities = ["language", "backend", "testing", "quality", "ci", "hosting"]
-techs = ["python", "fastapi", "pytest", "ruff"]
+techs = ["python", "fastapi", "pydantic", "httpx", "pytest", "ruff", "uv", "docker", "github-actions"]
 priority = 0

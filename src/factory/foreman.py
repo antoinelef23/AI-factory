@@ -41,7 +41,7 @@ from factory.design import (
     render_change_design,
     render_design,
 )
-from factory.detect import pyproject_dependencies
+from factory.detect import SKIP_DIRS, pyproject_dependencies
 from factory.drift import Drift, migration_idea
 from factory.gates import Executor, GateResult, format_report, run_gates, secrets_in_history, shell_executor
 from factory.guard import check_project, plan_radar_errors, plan_scope_errors
@@ -1038,20 +1038,23 @@ class Foreman:
             "{{module}}": item.slug.replace("-", "_"),
         }
         for path in sorted(src.rglob("*")):
-            if path.is_dir():
-                continue
             rel = path.relative_to(src)
+            if path.is_dir() or any(part in SKIP_DIRS for part in rel.parts):
+                continue  # an IT engineer's local .venv, node_modules or caches are not the template (A129)
             dest = app / rel
             if dest.exists():
                 continue  # never clobber work from a previous attempt
             dest.parent.mkdir(parents=True, exist_ok=True)
-            if path.suffix in TEXT_SUFFIXES:
-                text = path.read_text(encoding="utf-8")
-                for k, v in values.items():
-                    text = text.replace(k, v)
-                dest.write_text(text, encoding="utf-8", newline="\n")
-            else:
+            try:
+                text = path.read_text(encoding="utf-8") if path.suffix in TEXT_SUFFIXES else None
+            except UnicodeDecodeError:
+                text = None  # a binary with a text suffix: copied as is
+            if text is None:
                 shutil.copy2(path, dest)
+                continue
+            for k, v in values.items():
+                text = text.replace(k, v)
+            dest.write_text(text, encoding="utf-8", newline="\n")
         return f"scaffolded from golden_paths/{gp}"
 
     def _do_build_change(self, item: WorkItem) -> tuple[bool, str]:

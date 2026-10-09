@@ -6,6 +6,8 @@ The broker is not chosen here: the design (compiled from the tech radar) picks i
 
 from __future__ import annotations
 
+import importlib
+import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -54,3 +56,27 @@ def run(inbox: Inbox, limit: int | None = None) -> int:
         inbox.ack(message)
         processed += 1
     return processed
+
+
+def serve(inbox: Inbox, stop: threading.Event, idle_seconds: float = 1.0) -> int:
+    """The consumer process: drain the inbox, wait `idle_seconds` when it is empty, until `stop` is set.
+    Returns how many messages were processed."""
+    total = 0
+    while not stop.is_set():
+        done = run(inbox)
+        total += done
+        if not done:
+            stop.wait(idle_seconds)
+    return total
+
+
+def connect() -> Inbox | None:
+    """The broker's inbox, from the adapter written for the broker the design picked: `worker/adapter.py`
+    exposing `connect() -> Inbox`. None until that adapter exists."""
+    try:
+        adapter = importlib.import_module("worker.adapter")
+    except ModuleNotFoundError as e:
+        if e.name != "worker.adapter":
+            raise  # the adapter exists but one of ITS imports is missing: a real error
+        return None
+    return adapter.connect()

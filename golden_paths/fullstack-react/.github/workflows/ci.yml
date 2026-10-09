@@ -10,7 +10,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: uv sync
+      - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run pytest -q
       - run: npm --prefix web ci

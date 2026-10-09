@@ -97,3 +97,36 @@ def test_a_messaging_idea_is_scaffolded_from_python_worker(foreman):
 
 def test_an_app_without_a_manifest_has_no_gate_overrides(tmp_path):
     assert golden_gate_commands(tmp_path / "golden.toml") == {}
+
+
+@pytest.mark.parametrize("folder", ["python-fastapi", "python-worker", "fullstack-react"])
+def test_a_manifest_lists_every_radar_technology_its_template_ships(radar, folder):
+    """A held technology must stop the template from being offered: so `techs` cannot omit one (A80)."""
+    [gp] = [g for g in load_golden_paths(GOLDEN) if g.folder == folder]
+    shipped = set(check_project(GOLDEN / folder, radar, "prod").allowed)
+    assert shipped <= set(gp.techs), f"{folder} ships {sorted(shipped - set(gp.techs))} not in its techs"
+    assert all(radar.get(t) for t in gp.techs)
+
+
+def test_the_images_are_pinned_locked_and_unprivileged():
+    for folder in ("python-fastapi", "python-worker", "fullstack-react"):
+        text = (GOLDEN / folder / "Dockerfile").read_text(encoding="utf-8")
+        froms = [ln.split()[1] for ln in text.splitlines() if ln.startswith(("FROM ", "COPY --from=ghcr"))]
+        assert froms and all("@sha256:" in ref or ref.startswith("--from=ghcr") for ref in froms), folder
+        assert "uv:latest" not in text and "@sha256:" in text.split("COPY --from=ghcr", 1)[1].split()[0]
+        assert "uv sync --locked --no-dev" in text and "\nUSER app\n" in text
+        assert (GOLDEN / folder / ".dockerignore").is_file()
+    assert "COPY worker ./worker" in (GOLDEN / "python-worker" / "Dockerfile").read_text(encoding="utf-8")
+
+
+def test_the_scaffold_leaves_local_environments_behind_and_copies_binaries(foreman):
+    template = foreman.cfg.golden_paths_dir / "python-fastapi"
+    (template / ".venv" / "lib").mkdir(parents=True)
+    (template / ".venv" / "lib" / "x.py").write_text("junk\n", encoding="utf-8")
+    (template / "web" / "node_modules").mkdir(parents=True)
+    (template / "logo.json").write_bytes(b"\xff\xfe\x00binary")  # a text suffix, binary content
+    item = foreman.run(foreman.intake("Order api", "An HTTP API that lists orders", "poc"))
+    item = foreman.approve(foreman.approve(item, "business"), "owner")
+    app = foreman.app_dir(item)
+    assert not (app / ".venv").exists() and not (app / "web" / "node_modules").exists()
+    assert (app / "logo.json").read_bytes() == b"\xff\xfe\x00binary"

@@ -1,0 +1,10 @@
+# Never in the image: the host's environments, caches, build output and the factory's runtime state.
+.git
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+.env
+work
+web/node_modules
+web/dist

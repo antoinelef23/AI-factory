@@ -2,7 +2,7 @@
 name = "fullstack-react"
 description = "FastAPI backend + React frontend (Vite, TypeScript), tested with pytest and vitest"
 capabilities = ["language", "backend", "frontend", "testing", "quality", "ci", "hosting"]
-techs = ["python", "fastapi", "react", "typescript", "node", "vite", "vitest", "pytest", "ruff"]
+techs = ["python", "fastapi", "pydantic", "httpx", "react", "typescript", "node", "vite", "vitest", "pytest", "ruff", "uv", "docker", "github-actions"]
 priority = 2
 
 [gates.commands]

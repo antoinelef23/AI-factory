@@ -4,5 +4,5 @@
 name = "python-worker"
 description = "Event worker: a broker-agnostic consumer loop with a FastAPI health endpoint"
 capabilities = ["language", "backend", "messaging", "testing", "quality", "ci", "hosting"]
-techs = ["python", "fastapi", "pytest", "ruff"]
+techs = ["python", "fastapi", "pydantic", "httpx", "pytest", "ruff", "uv", "docker", "github-actions"]
 priority = 1

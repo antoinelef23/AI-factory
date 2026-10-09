@@ -1,4 +1,4 @@
-# IT standard CI (golden path python-fastapi). Do not edit per app.
+# IT standard CI (golden path python-worker). Do not edit per app.
 name: ci
 on: [push, pull_request]
 jobs:
@@ -7,6 +7,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync
+      - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run pytest -q
