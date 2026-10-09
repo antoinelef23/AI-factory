@@ -92,6 +92,17 @@ end-to-end evidence so far, and it would not have exposed H1, because a cooperat
 Picked up when their file is touched by a package above. Whatever is left after H7 gets one sweep and a
 refuted/fixed/deferred line each.
 
+## Status
+
+- **H1 done (2026-10-09).** Factory `11dbeae` (hardened host git + .git/config allowlist), `7606276`
+  (.git read-only in the container), `3fa1f9c` (every app in git before any agent), `d529ed5` (gate commands
+  from IT's golden path), `5e24797` (process-tree kill, container reaping, credential by name, judge symlinks,
+  apps' factory.toml). Claudo `c843e37` (read-only .git, no hooks in sandbox mode), `a7bd16b` (run label).
+  Live probe in the real container (docker only, free): writing `.git/hooks/pre-commit` and
+  `git config core.fsmonitor` from the container fails with "Read-only file system"; the host commit that
+  follows runs nothing. Control with the pre-H1 mount: both were planted, and plain host git EXECUTED both
+  on Windows. The factory's allowlist then refused the planted config.
+
 ## Exit criteria
 - H1-H4: each fix has a test that fails on the old code, `just check` and Claudo `just gate-ci` are green, and
   CI is green after the push (with Antoine's go).

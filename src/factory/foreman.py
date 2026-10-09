@@ -338,12 +338,19 @@ class Foreman:
                 item.status = "waiting"
                 item.log("waiting", f"{step.role}: {step.summary}")
                 break
-            if step.name == "build":
-                refusal = self._containment(item)
+            if step.name in ("build", "gate"):
+                refusal = (
+                    self._containment(item)
+                    if step.name == "build"
+                    else self._still_contained(
+                        item, "the gates (they run the agent's code)", need_credential=False
+                    )
+                )
                 if refusal:  # not an attempt: nothing ran
                     item.status, item.feedback = "blocked", refusal
                     item.log("blocked", refusal[:600])
                     break
+            if step.name == "build":
                 builds_this_run += 1
                 item.build_attempts += 1
             handler = getattr(self, f"_do_{step.name}")
@@ -435,6 +442,10 @@ class Foreman:
         if item.stage == "plan_review":
             self._mark_plan_approved(item, by)
             self._record_hash(item, "tasks.md")  # the plan, frozen at its approval (run-log rows excluded)
+        if item.stage == "ship_review" and item.claudo_cp and not item.claudo_cp_consumed:
+            refusal = self._still_contained(item, "Claudo's final run", need_credential=True)
+            if refusal:
+                raise FactoryError(refusal)
         if item.stage == "ship_review" and not note.strip():
             # The human decides, but not blind: shipping over the reviewer's objection, or over something the
             # factory had to flag, must be justified, and the justification is recorded with the approval.
@@ -1435,6 +1446,34 @@ class Foreman:
             f"the build sandbox is not ready (required for {item.maturity} builds):\n- "
             + "\n- ".join(problems)
             + "\nOr rerun with --unsafe-host to build on the host (recorded for IT to acknowledge)."
+        )
+
+    def _still_contained(self, item: WorkItem, what: str, *, need_credential: bool) -> str:
+        """Agent code is about to run again for an item built in the sandbox: it runs there too, or the record
+        says otherwise. A refusal ("" = go) when the sandbox is not ready; with --unsafe-host the item is
+        downgraded to "host" and IT must acknowledge it (audit A46-A48). Never a silent move to the host."""
+        if item.build_where != "sandbox":
+            return ""
+        problems = (
+            ["--unsafe-host was given, so no sandbox is configured for this run"]
+            if self.sandbox is None
+            else self.sandbox.problems(need_credential=need_credential)
+        )
+        if not problems:
+            return ""
+        if self.unsafe_host:
+            item.build_where = "host"
+            self._add_ack(
+                item,
+                "unsafe_host",
+                f"{what} ran on the host with --unsafe-host, not in the sandbox it was built in",
+            )
+            item.log("unsafe_host", f"{what}: on the host (--unsafe-host); the sandbox: {problems[0]}")
+            return ""
+        return (
+            f"{what} must run in the sandbox this item was built in, which is not ready:\n- "
+            + "\n- ".join(problems)
+            + "\nOr rerun with --unsafe-host (recorded for IT to acknowledge)."
         )
 
     def _builder(self, item: WorkItem) -> ClaudeRunner:
