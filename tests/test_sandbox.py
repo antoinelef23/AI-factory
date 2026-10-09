@@ -62,8 +62,9 @@ def test_the_container_is_hardened_and_never_gets_the_secret(monkeypatch, creden
         assert flag in argv
     assert argv[argv.index("-v") + 1].endswith("/apps/x:/workspace:rw")
     assert argv.count("-v") == 1  # only the app: no host home, no factory tree, no state directory
-    assert "HTTPS_PROXY=http://lab-egress-proxy:8888" in argv and "CLAUDE_CODE_OAUTH_TOKEN=oat-test" in argv
-    assert not any("host-secret" in a or "host-gh" in a for a in argv)
+    assert "HTTPS_PROXY=http://lab-egress-proxy:8888" in argv
+    assert argv[argv.index("CLAUDE_CODE_OAUTH_TOKEN") - 1] == "-e"  # by name: docker reads the value itself
+    assert not any("host-secret" in a or "host-gh" in a or "oat-test" in a for a in argv)
     assert argv[-4:] == ["lab-agent:latest", "sh", "-c", "uv run pytest"]
 
 

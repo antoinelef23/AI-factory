@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,7 +84,8 @@ class Sandbox:
 
     # ------------------------------------------------------------------ the container
     def env(self) -> dict[str, str]:
-        out = {k: v for k, v in os.environ.items() if k in FORWARDED and v}
+        """What the container gets besides its credential (which `argv` passes by name only)."""
+        out = {k: v for k, v in os.environ.items() if k in FORWARDED and k not in CREDENTIALS and v}
         out.update(
             {
                 "HTTPS_PROXY": self.proxy,
@@ -96,15 +98,28 @@ class Sandbox:
         )
         return out
 
-    def argv(self, workspace: Path, command: list[str], extra_env: dict[str, str] | None = None) -> list[str]:
+    def argv(
+        self,
+        workspace: Path,
+        command: list[str],
+        extra_env: dict[str, str] | None = None,
+        *,
+        name: str = "",
+        credential: bool = True,
+    ) -> list[str]:
         """The hardened `docker run`, the same confinement as Claudo's sandbox runner.
 
         The app's .git is mounted read-only on top: the host runs git in this folder afterwards, so code in
         the container must not be able to plant a hook or a config setting there (audit A1). Agents never
-        commit: the factory and Claudo's orchestrator commit on the host."""
+        commit: the factory and Claudo's orchestrator commit on the host.
+
+        The model credential goes by NAME (`-e KEY`, docker reads the value from its own environment), so it
+        is never in an argv that `ps` shows; gate commands get none (`credential=False`). `name` lets a
+        timeout kill the container itself, not only the docker CLI (audit A65)."""
         ws = Path(workspace).resolve()
         argv = [
             "docker", "run", "--rm", "-i",
+            *(["--name", name] if name else []),
             "--network", self.network,
             "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges",
@@ -120,11 +135,47 @@ class Sandbox:
         argv += ["-w", "/workspace", "-e", f"HOME={HOME}"]
         for key, value in sorted({**self.env(), **(extra_env or {})}.items()):
             argv += ["-e", f"{key}={value}"]
+        if credential:
+            argv += [arg for key in CREDENTIALS if os.environ.get(key) for arg in ("-e", key)]
         return [*argv, self.image, *command]
 
-    def claudo_env(self) -> dict[str, str]:
-        """What makes Claudo run its agents AND their code (verify, evals) in this sandbox."""
+    def reap(self, label: str) -> list[str]:
+        """Kill every container of a Claudo run still alive after it stopped (killing the orchestrator kills
+        the docker CLIs, not their containers). Returns the ids killed."""
+        rc, out = self.docker(["ps", "-q", "--filter", f"label=lab.run={label}"])
+        ids = out.split() if rc == 0 else []
+        if ids:
+            self.docker(["kill", *ids])
+        return ids
+
+    def run_contained(
+        self, argv: list[str], name: str, timeout: int, input_text: str | None = None
+    ) -> tuple[int, str, str]:
+        """Run a `docker run --name <name>` argv; on timeout the container is killed, not left running (and
+        still writing to the app) after the docker CLI is gone. (rc, stdout, stderr); 124 timeout, 127 no
+        docker."""
+        try:
+            p = subprocess.run(
+                argv,
+                input=input_text,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            self.docker(["kill", name])
+            return 124, "", f"timed out after {timeout}s (container {name} killed)"
+        except FileNotFoundError:
+            return 127, "", "docker not found: the sandbox needs Docker"
+        return p.returncode, p.stdout, p.stderr
+
+    def claudo_env(self, label: str = "") -> dict[str, str]:
+        """What makes Claudo run its agents AND their code (verify, evals) in this sandbox. `label` tags its
+        containers so `reap` can kill them all when the run stops."""
         return {
+            **({"LAB_SANDBOX_LABEL": label} if label else {}),
             "LAB_RUNNER": "sandbox",
             "LAB_SANDBOX_IMAGE": self.image,
             "LAB_SANDBOX_NETWORK": self.network,
@@ -136,16 +187,14 @@ class Sandbox:
         """A gate command (`uv run pytest`, `npm ci`...) in the container. The environment goes to
         /workspace/.venv so the dependencies gate can read the installed licences afterwards."""
         shell = ["lab-ws", "sh", "-c", command] if self.git_modes else ["sh", "-c", command]
-        argv = self.argv(cwd, shell, {"UV_PROJECT_ENVIRONMENT": "/workspace/.venv"})
-        try:
-            p = subprocess.run(
-                argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=self.timeout
-            )
-        except subprocess.TimeoutExpired:
-            return 124, f"timeout: {command}"
-        except FileNotFoundError:
-            return 127, "docker not found: the sandbox needs Docker"
-        return p.returncode, (p.stdout + p.stderr)[-4000:]
+        name = f"factory-gate-{uuid.uuid4().hex[:12]}"
+        argv = self.argv(
+            cwd, shell, {"UV_PROJECT_ENVIRONMENT": "/workspace/.venv"}, name=name, credential=False
+        )
+        rc, out, err = self.run_contained(argv, name, self.timeout)
+        if rc == 124:
+            return 124, f"timeout: {command} ({err})"
+        return rc, (out + err)[-4000:]
 
 
 class SandboxedRunner:
@@ -172,18 +221,10 @@ class SandboxedRunner:
             "claude", model=model, tools=tools or [], max_turns=max_turns, permission_mode=permission_mode
         )
         extra = {} if thinking_tokens is None else {"MAX_THINKING_TOKENS": str(thinking_tokens)}
-        try:
-            p = subprocess.run(
-                self.sandbox.argv(cwd, command, extra),
-                input=prompt,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=self.timeout,
-            )
-        except subprocess.TimeoutExpired:
-            return AgentResult(False, "", 0.0, f"sandboxed claude timed out after {self.timeout}s")
-        except FileNotFoundError:
-            return AgentResult(False, "", 0.0, "docker not found: the sandbox needs Docker")
-        return parse_claude_json(p.returncode, p.stdout, p.stderr)
+        name = f"factory-agent-{uuid.uuid4().hex[:12]}"
+        rc, out, err = self.sandbox.run_contained(
+            self.sandbox.argv(cwd, command, extra, name=name), name, self.timeout, input_text=prompt
+        )
+        if rc in (124, 127) and not out:
+            return AgentResult(False, "", 0.0, f"sandboxed claude: {err}")
+        return parse_claude_json(rc, out, err)

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from factory.agents import BUILD_TOOLS, READ_ONLY_TOOLS, ClaudeRunner, strip_fences
 from factory.claudo import (
+    BuildResult,
     ClaudoEngine,
     EngineError,
     LintResult,
@@ -855,16 +856,8 @@ class Foreman:
             ctx = f"\nSPEC the plan must implement:\n<spec>\n{self.store.read(item, 'spec.md')}\n</spec>\n"
             ctx += f"DESIGN (allowed stack):\n<design>\n{self.store.read(item, 'design.md')}\n</design>\n"
             return self.store.read(item, "tasks.md"), ctx
-        app = self.app_dir(item)
-        parts, size = [], 0
-        for path in sorted([*app.glob("app/**/*.py"), *app.glob("tests/**/*.py")]):
-            text = path.read_text(encoding="utf-8")
-            parts.append(f"### {path.relative_to(app).as_posix()}\n{text}")
-            size += len(text)
-            if size > 40_000:
-                break
         ctx = f"\nSPEC the code must satisfy:\n<spec>\n{self.store.read(item, 'spec.md')}\n</spec>\n"
-        return "\n\n".join(parts), ctx
+        return judged_sources(self.app_dir(item)), ctx
 
     def _judge_on(self, item: WorkItem) -> bool:
         """`judge = true` judges everything; `judge_from = "mvp"` judges items at that maturity and above."""
@@ -1471,8 +1464,29 @@ class Foreman:
         if self.cfg.claudo_budget_usd:
             env["LAB_BUDGET_USD"] = str(self.cfg.claudo_budget_usd)
         if item.build_where == "sandbox" and self.sandbox is not None:  # agents AND their verify/evals
-            env.update(self.sandbox.claudo_env())
+            env.update(self.sandbox.claudo_env(self._run_label(item)))
         return env
+
+    @staticmethod
+    def _run_label(item: WorkItem) -> str:
+        return f"factory-{item.slug}"
+
+    def _run_claudo(self, item: WorkItem, app: Path, *, stop_at_checkpoint: bool) -> BuildResult:
+        """One orchestrator run; afterwards, none of its sandbox containers outlives it (audit A12, A65)."""
+        assert self.engine is not None
+        try:
+            return self.engine.run_build(
+                item.slug,
+                app,
+                stop_at_checkpoint=stop_at_checkpoint,
+                env=self._claudo_env(item),
+                timeout=self.cfg.claudo_timeout,
+            )
+        finally:
+            if item.build_where == "sandbox" and self.sandbox is not None:
+                reaped = self.sandbox.reap(self._run_label(item))
+                if reaped:
+                    item.log("reaped", f"killed {len(reaped)} container(s) the stopped run left behind")
 
     def _commit_leftovers(self, item: WorkItem, app: Path) -> None:
         bookkeeping, drift = commit_leftovers_split(app, item.slug)
@@ -1530,9 +1544,7 @@ class Foreman:
                 item.notes.append(warning)
                 item.log("warning", warning)
         self.store.save(item)
-        res = self.engine.run_build(
-            item.slug, app, env=self._claudo_env(item), timeout=self.cfg.claudo_timeout
-        )
+        res = self._run_claudo(item, app, stop_at_checkpoint=True)
         self.store.write(item, "claudo-build.log", res.log[-30000:])
         self._add_claudo_cost(item, app)
         if res.ok:
@@ -1584,13 +1596,7 @@ class Foreman:
             self.engine.sign_approval(app, item.slug, item.claudo_cp, by, secret, nonce=item.approval_nonce)
         except EngineError as e:
             return "blocked", str(e)
-        res = self.engine.run_build(
-            item.slug,
-            app,
-            stop_at_checkpoint=False,
-            env=self._claudo_env(item),
-            timeout=self.cfg.claudo_timeout,
-        )
+        res = self._run_claudo(item, app, stop_at_checkpoint=False)
         self.store.write(item, "claudo-final.log", res.log[-30000:])
         self._add_claudo_cost(item, app)
         if res.ok:
@@ -1739,6 +1745,37 @@ def golden_gate_commands(manifest: Path) -> dict[str, str]:
     if not isinstance(commands, dict):
         raise ValueError(f"{manifest}: [gates.commands] must be a table")
     return {k: str(v) for k, v in commands.items()}
+
+
+# What the build judge reads, each group with its own budget so tests and a frontend are never crowded out by
+# the backend (audit A127, A128).
+JUDGED_SOURCES = (
+    ("app", ("*.py",)),
+    ("worker", ("*.py",)),
+    ("web/src", ("*.ts", "*.tsx")),
+    ("tests", ("*.py",)),
+)
+JUDGE_GROUP_BUDGET = 12_000
+
+
+def judged_sources(app: Path) -> str:
+    """The app's code for the build judge. A symlink, or a file resolving outside the app, is never read:
+    the agent could plant one to send a host file to the model (audit A126)."""
+    root = app.resolve()
+    parts: list[str] = []
+    for folder, patterns in JUDGED_SOURCES:
+        files = sorted({p for pattern in patterns for p in (app / folder).rglob(pattern)})
+        size, shown = 0, 0
+        for path in files:
+            if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(root):
+                continue
+            if size > JUDGE_GROUP_BUDGET:
+                parts.append(f"### {folder}/: {len(files) - shown} more file(s) not shown (budget)")
+                break
+            text = path.read_text(encoding="utf-8", errors="replace")
+            parts.append(f"### {path.relative_to(app).as_posix()}\n{text}")
+            size, shown = size + len(text), shown + 1
+    return "\n\n".join(parts)
 
 
 def describe_step(stage: str) -> str:

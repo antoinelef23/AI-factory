@@ -75,8 +75,27 @@ def find_root(start: Path | None = None) -> Path:
     here = (start or Path.cwd()).resolve()
     for d in (here, *here.parents):
         if (d / CONFIG_NAME).is_file():
+            _refuse_an_apps_config(d)
             return d
     raise ConfigError(f"no {CONFIG_NAME} found from {here} upwards (set AI_FACTORY_ROOT)")
+
+
+def _refuse_an_apps_config(found: Path) -> None:
+    """A factory.toml inside an outer factory's apps folder belongs to an app (an agent can write it): running
+    the CLI from inside an app must not make that file the factory's configuration (audit A90)."""
+    for outer in found.parents:
+        if not (outer / CONFIG_NAME).is_file():
+            continue
+        try:
+            data = tomllib.loads((outer / CONFIG_NAME).read_text(encoding="utf-8"))
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError):
+            continue
+        apps = (outer / data.get("factory", {}).get("apps_dir", "apps")).resolve()
+        if found.is_relative_to(apps):
+            raise ConfigError(
+                f"{found / CONFIG_NAME} is inside the apps folder of the factory at {outer}: it belongs to "
+                "an app, not to the factory. Run the CLI from the factory root, or set AI_FACTORY_ROOT"
+            )
 
 
 def load_config(root: Path) -> Config:

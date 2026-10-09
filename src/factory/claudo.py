@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import subprocess
 import sys
 import tempfile
@@ -154,12 +155,13 @@ class ClaudoEngine:
             encoding="utf-8",
             errors="replace",
             env={**os.environ, "LAB_NO_NOTIFY": "1", "PYTHONUTF8": "1", **(env or {})},
+            **OWN_PROCESS_GROUP,
         )
         timed_out = threading.Event()
 
         def expire() -> None:
             timed_out.set()
-            proc.kill()
+            _stop(proc)
 
         watchdog = threading.Timer(timeout, expire)
         watchdog.start()
@@ -337,10 +339,33 @@ def load_or_create_secret(path: Path) -> str:
     return secret
 
 
+# The orchestrator runs in its own process group, so stopping it stops its agents too (audit A12): killing
+# only its PID left them running, and spending.
+OWN_PROCESS_GROUP: dict = (
+    {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+)
+
+
 def _stop(proc: subprocess.Popen) -> None:
-    proc.terminate()
+    """Stop the orchestrator AND every process it started (its agents, the docker CLIs)."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=30)
+    else:
+        _signal_group(proc, signal.SIGTERM)
+        try:
+            proc.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            _signal_group(proc, signal.SIGKILL)
     try:
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=10)
+
+
+def _signal_group(proc: subprocess.Popen, sig: int) -> None:
+    try:
+        os.killpg(proc.pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
