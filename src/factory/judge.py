@@ -148,6 +148,21 @@ def is_grounded(quote: str, haystack: str) -> bool:
     return grounded_chars >= MIN_GROUNDED_CHARS
 
 
+ABSENT_PREFIX = "absent:"
+
+
+def absence_holds(quote: str, score: int, haystack: str) -> bool:
+    """`ABSENT: <element>` grounds a LOW score for something missing entirely: nothing can be quoted from a
+    section that does not exist, so without this an evals table removed outright left the criterion
+    unscored (calibration 2026-10-09). It holds only when the named element really does not occur in the
+    artifact (normalised) and the score is 1 or 2: a false absence claim is discarded like a made-up quote."""
+    text = _norm(quote)
+    if not text.startswith(ABSENT_PREFIX) or score > 2:
+        return False
+    element = text[len(ABSENT_PREFIX) :].strip()
+    return len(element) >= 4 and element not in haystack
+
+
 def build_prompt(kind: str, artifact: str, idea: str, extra: str = "") -> str:
     rubric = "\n".join(f"- {cid}: 5 means: {desc}" for cid, desc in RUBRICS[kind])
     ids = ", ".join(cid for cid, _ in RUBRICS[kind])
@@ -168,8 +183,10 @@ Score each criterion from 1 to 5 (5 = fully meets it, 3 = partially, 1 = absent 
 {rubric}
 
 For EVERY criterion give a `quote`: an EXACT excerpt (max 160 chars, copied verbatim, no
-paraphrase) from the artifact that justifies the score; for an absent element quote the nearest
-text that shows the gap. A quote that does not occur verbatim in the artifact is discarded.
+paraphrase) from the artifact that justifies the score. A quote that does not occur verbatim in the
+artifact is discarded. When the element a criterion needs is MISSING ENTIRELY (for example there is no
+evals table at all), write the quote as `ABSENT: <name of the missing element>` (e.g. `ABSENT: Evals`) and
+score 1 or 2: it is checked that this name really does not occur in the artifact.
 
 Answer with ONLY this JSON (no prose, no code fence):
 {{"criteria": [
@@ -223,7 +240,7 @@ def evaluate(kind: str, raw: str, artifact: str) -> JudgeReport:
             continue
         seen.add(cid)
         quote = str(raw_c.get("quote", "")).strip()
-        grounded = is_grounded(quote, haystack)
+        grounded = is_grounded(quote, haystack) or absence_holds(quote, score, haystack)
         if not grounded:
             report.problems.append(f"{cid}: quote not found verbatim in the artifact (score ignored)")
         report.criteria.append(

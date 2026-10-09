@@ -174,3 +174,39 @@ def test_the_fidelity_rubric_does_not_penalize_what_the_factory_itself_mandates(
     assert (
         "GET /health" in fidelity and "tech radar" in fidelity and "NOT inventions" in fidelity
     )  # ...is exempt
+
+
+# ------------------------------------------------------------------ absence claims are checked, not trusted
+
+
+def test_an_absence_claim_grounds_a_low_score_only_when_the_element_is_really_missing():
+    from factory.judge import _norm, absence_holds
+
+    artifact = _norm("# Spec\n## 4. Behaviors\n- BHV-1: x\n## 6. Non-goals\n- none\n")
+    assert absence_holds("ABSENT: Evals", 1, artifact)
+    assert absence_holds("absent: evals table", 2, artifact)
+    assert not absence_holds("ABSENT: Behaviors", 1, artifact)  # it is there: a false claim is discarded
+    assert not absence_holds("ABSENT: Evals", 4, artifact)  # an absence cannot justify a good score
+    assert not absence_holds("ABSENT: ev", 1, artifact)  # too short to mean anything
+    assert not absence_holds("Evals", 1, artifact)  # not an absence claim
+
+
+def test_evaluate_keeps_a_checked_absence_and_discards_a_false_one():
+    import json
+
+    from factory.judge import RUBRICS, evaluate
+
+    artifact = "# Spec\n## 4. Behaviors\n- BHV-1: Given a valid request, When it is submitted, Then 201.\n"
+    good_quote = "Given a valid request, When it is submitted, Then 201."
+    crit = []
+    for cid, _ in RUBRICS["spec"]:
+        if cid == "eval_coverage":
+            crit.append({"id": cid, "score": 1, "evidence": "no evals", "quote": "ABSENT: Evals"})
+        elif cid == "examples":
+            crit.append({"id": cid, "score": 1, "evidence": "lie", "quote": "ABSENT: Behaviors"})
+        else:
+            crit.append({"id": cid, "score": 5, "evidence": "ok", "quote": good_quote})
+    report = evaluate("spec", json.dumps({"criteria": crit, "summary": "s"}), artifact)
+    grounded = {c.id: c.grounded for c in report.criteria}
+    assert grounded["eval_coverage"] is True and grounded["examples"] is False
+    assert report.verdict == "fail"  # the checked absence (score 1) counts

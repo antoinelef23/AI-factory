@@ -29,7 +29,11 @@ reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens 
 - **Invented KPIs** (finding 2): both spec prompts allow only the targets the idea gives.
 - **Judge context** (finding 3): a change's artifacts are judged as a delta; new-app mandates do not apply.
 - **Judge panel**: `judge_votes = 3` (median per criterion, unreliable runs do not vote, every vote in the report);
-  the billed calibration can run as a panel (`JUDGE_VOTES=3`). Not measured live yet.
+  the billed calibration can run as a panel (`JUDGE_VOTES=3`).
+- **Panel measured (2026-10-09, billed, $0.73 for two runs):** 3 votes caught 3/4; the miss (`no_evals`) was
+  structural: a missing section cannot be quoted, so its score was discarded. With checked absence claims
+  (`ABSENT: <element>`, accepted only if the element really does not occur and the score is 1-2): **4/4
+  caught**, good spec not failed, about-endpoint case `revise` (fidelity 3).
 Verified: `just check` 561 passed, 2 skipped (free; no billed call in this step).
 
 ### V-1 / V-2: the corrected factory on real Claudo and real GitHub (2026-10-08, Antoine's go)
@@ -222,7 +226,5 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   already have the recipe. Same class as J-5, not fixed: it would need a deliberate setup commit on the base.
 
 ## Next steps (in order)
-1. Measure the judge panel: `JUDGE_VOTES=3 just calibrate` (billed, about $0.6) to see whether the median
-   steadies the calibration that single runs did not.
-2. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
-3. P2-5 GitHub issue intake; P3-3 version constraints / P3-4 licence policy from lockfiles; P3-8 more golden paths.
+1. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
+2. P2-5 GitHub issue intake; P3-3 version constraints / P3-4 licence policy from lockfiles; P3-8 more golden paths.
