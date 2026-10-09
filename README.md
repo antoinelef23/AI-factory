@@ -119,6 +119,20 @@ showing the change branch until IT merges, so `drift` marks that app *in flight*
 failing while a *migration* is pending, since the violation is still there. One open change per app.
 `factory drift --open` now opens migrations that you can simply `run`.
 
+## Ideas from GitHub issues
+
+Business teams can file ideas as issues. Set `[intake] repo = "acme/ideas"` (and `[delivery] provider = "github"`):
+
+```powershell
+uv run factory inbox      # labelled issues -> work items; progress is commented back on each issue
+```
+
+Every open issue labelled `factory` becomes a work item (title, body as the idea, maturity from a `maturity:mvp`
+label or a `Maturity: mvp` line, default POC; the issue's author is the requester). The factory comments on the
+issue when it receives it and each time its stage changes (waiting for whose decision, blocked, delivered with the
+repository or pull request link). An issue is imported once. With identity on, only issues from accounts that hold
+the business role are taken: an issue body is untrusted text that ends up in the agents' prompts.
+
 ## Who decides: verified identity and roles
 
 By default roles are self-declared (`--as it --by Bob` is trusted; pull requests say "self-declared"). Set

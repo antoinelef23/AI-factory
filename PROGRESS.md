@@ -29,6 +29,10 @@ reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens 
   constraints and installed licences against `[licenses] forbidden`. Checked on the real V-1 app: 25 locked
   packages, 24 licences read, compliant; it first exposed a design bug (FastAPI's constraint applied to uvicorn),
   fixed: a constraint pins the package named like the entry's id.
+- **P2-5 GitHub issue intake**: `factory inbox` imports open issues labelled `factory` from `[intake] repo` (maturity
+  from a label or a `Maturity:` line, author as requester, business role required when identity is on), comments
+  on receipt and on every stage change. Live smoke on the private `v2-app-ping-service`: issue #2 imported, receipt
+  and "waiting for business" comments posted, issue closed afterwards.
 
 ### After V-1/V-2 (2026-10-09, Opus): the live findings fixed, the judge as a panel
 - **Plan restore** (finding 1): the `## Run log` section is bookkeeping, but only its table rows, blank lines and
@@ -240,4 +244,4 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 
 ## Next steps (in order)
 1. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
-2. P2-5 GitHub issue intake; P3-3 version constraints / P3-4 licence policy from lockfiles; P3-8 more golden paths.
+2. P3-8 more golden paths; P3-9 LLM capability extraction.

@@ -44,6 +44,15 @@ class GitHost(Protocol):
         skipping | cancel. An empty list means the repository runs no CI on it."""
         ...
 
+    def list_issues(self, repo: str, label: str) -> list[dict]:
+        """Open issues of `repo` (owner/name) carrying `label`: dicts with number, title, body, author, url,
+        labels (list of names)."""
+        ...
+
+    def comment_issue(self, url: str, body: str) -> None:
+        """Add a comment to an issue."""
+        ...
+
 
 class GhCli:
     """GitHub through the `gh` CLI (already authenticated on this machine)."""
@@ -102,6 +111,30 @@ class GhCli:
 
     def close_pull_request(self, url: str, comment: str) -> None:
         self._run("pr", "close", url, "--comment", comment, "--delete-branch")
+
+    def list_issues(self, repo: str, label: str) -> list[dict]:
+        out = self._run(
+            "issue", "list", "--repo", repo, "--label", label, "--state", "open", "--limit", "100",
+            "--json", "number,title,body,author,url,labels",
+        )  # fmt: skip
+        try:
+            raw = json.loads(out or "[]")
+            return [
+                {
+                    "number": int(i["number"]),
+                    "title": str(i.get("title", "")),
+                    "body": str(i.get("body") or ""),
+                    "author": str((i.get("author") or {}).get("login", "")),
+                    "url": str(i["url"]),
+                    "labels": [str(lb.get("name", "")) for lb in i.get("labels") or []],
+                }
+                for i in raw
+            ]
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            raise DeliveryError(f"gh issue list: unreadable answer: {out[:200]}") from e
+
+    def comment_issue(self, url: str, body: str) -> None:
+        self._run("issue", "comment", url, "--body-file", "-", input_text=body)
 
     def pull_request_checks(self, url: str) -> list[tuple[str, str]]:
         # `gh pr checks` exits non-zero when a check failed (1) or is pending (8): the JSON is the answer.

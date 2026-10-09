@@ -163,6 +163,19 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inbox(args: argparse.Namespace) -> int:
+    f = _foreman(args, "offline")
+    new, skipped = f.inbox()
+    for item in new:
+        print(f"New item {item.slug} [{item.maturity}] from {item.issue_url} (by {item.requester})")
+    for line in skipped:
+        print(f"skipped {line}")
+    if not new and not skipped:
+        print(f"No new issue labelled `{f.cfg.intake_label}` in {f.cfg.intake_repo}.")
+    print("Progress is reported on each issue; next: `factory run <slug>`.")
+    return 0
+
+
 def cmd_abandon(args: argparse.Namespace) -> int:
     f = _foreman(args, "offline")
     item = f.abandon(f.store.load(args.slug), args.role, args.reason, args.by, args.pr_closed)
@@ -411,6 +424,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("sync", help="after the pull request was merged on the host, update the local app")
     sp.add_argument("slug")
     sp.set_defaults(func=cmd_sync)
+
+    sp = sub.add_parser("inbox", help="import labelled GitHub issues as ideas and report progress on them")
+    sp.set_defaults(func=cmd_inbox)
 
     sp = sub.add_parser("abandon", help="IT/owner: drop a change nobody wants, freeing the app")
     sp.add_argument("slug")

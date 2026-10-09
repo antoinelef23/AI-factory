@@ -37,6 +37,8 @@ class Config:
     identity_provider: str = "none"  # [identity] provider: none (self-declared roles) | github
     roles_path: Path = Path("roles.toml")  # [identity] roles: who holds which role (IT-owned)
     four_eyes: bool = False  # [identity] four_eyes: one person cannot decide two roles of one item
+    intake_repo: str = ""  # [intake] repo: owner/name whose labelled issues are business ideas
+    intake_label: str = "factory"  # [intake] label
     delivery_provider: str = "none"  # [delivery] provider: none | github
     delivery_owner: str = (
         ""  # [delivery] owner: account/org for the repositories ("" = the authenticated user)
@@ -104,6 +106,8 @@ def load_config(root: Path) -> Config:
         identity_provider=data.get("identity", {}).get("provider", "none"),
         roles_path=root / data.get("identity", {}).get("roles", "roles.toml"),
         four_eyes=bool(data.get("identity", {}).get("four_eyes", False)),
+        intake_repo=str(data.get("intake", {}).get("repo", "")),
+        intake_label=str(data.get("intake", {}).get("label", "factory")),
         delivery_provider=data.get("delivery", {}).get("provider", "none"),
         delivery_owner=data.get("delivery", {}).get("owner", ""),
         repo_prefix=data.get("delivery", {}).get("repo_prefix", "app-"),

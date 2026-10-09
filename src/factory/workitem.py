@@ -64,6 +64,8 @@ class WorkItem:
     merged: bool = (
         False  # IT merged the change branch (`factory merge`, or the pull request + `factory sync`)
     )
+    issue_url: str = ""  # the GitHub issue this idea came from (`factory inbox`)
+    issue_reported: str = ""  # the last stage/status the factory commented on that issue
     repo: str = ""  # owner/name of the app's private repository once published
     repo_url: str = ""  # the remote the app pushes to
     pr_url: str = ""  # the pull request opened for a change

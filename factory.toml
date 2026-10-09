@@ -50,6 +50,14 @@ provider = "none"
 roles = "roles.toml"
 four_eyes = false
 
+[intake]
+# GitHub issue intake (`factory inbox`, needs [delivery] provider = "github"): open issues of `repo` carrying
+# `label` become work items (title, body as the idea, a `maturity:mvp` label or a "Maturity: mvp" line, default
+# poc); the factory comments on each issue when it is received and whenever its stage changes. With identity on,
+# only issues from accounts holding the business role are taken. Empty repo = off.
+repo = ""
+label = "factory"
+
 [delivery]
 # Where shipped apps go. OFF by default: nothing leaves this machine unless IT runs `factory publish`.
 # "github": one PRIVATE repository per app (named repo_prefix + slug) and one pull request per change, through the

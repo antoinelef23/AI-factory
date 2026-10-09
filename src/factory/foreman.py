@@ -8,6 +8,7 @@ reason in `feedback`, which the next attempt receives.
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import shutil
 from collections.abc import Callable
@@ -143,6 +144,95 @@ class Foreman:
         self.store.save(item)
         self.store.write(item, "idea.md", idea_md(item))
         return item
+
+    # ------------------------------------------------------------ GitHub issue intake (ROADMAP P2-5)
+    def inbox(self) -> tuple[list[WorkItem], list[str]]:
+        """Import the labelled issues of the intake repository as work items, then report every imported
+        item's progress on its issue. Returns (new items, skipped issue lines). Idempotent: an issue is
+        imported once."""
+        host = self._host()
+        if not self.cfg.intake_repo:
+            raise FactoryError('GitHub intake is off: set [intake] repo = "owner/name" in factory.toml')
+        known = {i.issue_url for i in self.store.all() if i.issue_url}
+        new, skipped = [], []
+        try:
+            issues = host.list_issues(self.cfg.intake_repo, self.cfg.intake_label)
+        except DeliveryError as e:
+            raise FactoryError(str(e)) from e
+        for issue in sorted(issues, key=lambda i: i["number"]):
+            if issue["url"] in known:
+                continue
+            reason = self._issue_refusal(issue)
+            if reason:
+                skipped.append(f"#{issue['number']} {issue['title']!r}: {reason}")
+                continue
+            item = self.intake(
+                issue["title"],
+                issue["body"].strip() or issue["title"],
+                self._issue_maturity(issue),
+                requester=issue["author"] or "business",
+            )
+            item.issue_url = issue["url"]
+            item.log("intake", f"from GitHub issue {issue['url']}")
+            self.store.save(item)
+            new.append(item)
+        self.report_issues()
+        return [self.store.load(i.slug) for i in new], skipped  # as reported (issue_reported updated)
+
+    def _issue_refusal(self, issue: dict) -> str:
+        if not issue["title"].strip():
+            return "no title"
+        if self.identity is not None and not self.roles.holds(issue["author"], "business"):
+            return f"author {issue['author'] or '?'} does not hold the business role in roles.toml"
+        return ""
+
+    @staticmethod
+    def _issue_maturity(issue: dict) -> str:
+        for label in issue["labels"]:
+            if label.lower().startswith("maturity:") and label.split(":", 1)[1].strip().lower() in MATURITIES:
+                return label.split(":", 1)[1].strip().lower()
+        m = re.search(r"(?im)^\s*maturity\s*:\s*(pov|poc|mvp|prod)\b", issue["body"])
+        return m.group(1).lower() if m else "poc"
+
+    def report_issues(self) -> int:
+        """Comment on each imported item's issue when its stage or status changed since the last comment."""
+        host = self._host()
+        posted = 0
+        for item in self.store.all():
+            if not item.issue_url:
+                continue
+            state = f"{item.stage}/{item.status}"
+            if state == item.issue_reported:
+                continue
+            try:
+                host.comment_issue(item.issue_url, self._issue_comment(item))
+            except DeliveryError as e:
+                raise FactoryError(str(e)) from e
+            item.issue_reported = state
+            item.log("issue_comment", f"reported {state} on {item.issue_url}")
+            self.store.save(item)
+            posted += 1
+        return posted
+
+    def _issue_comment(self, item: WorkItem) -> str:
+        if not item.issue_reported:
+            head = (
+                f"Received by the AI software factory as work item `{item.slug}` "
+                f"(maturity `{item.maturity}`)."
+            )
+        else:
+            head = f"Work item `{item.slug}` moved on."
+        lines = [head, "", f"- Stage: **{describe_step(item.stage)}**", f"- Status: {item.status}"]
+        if item.status == "waiting" and item.step.role:
+            lines.append(f"- Waiting for: the **{item.step.role}** decision")
+        if item.repo_url:
+            lines.append(f"- Repository: {item.repo_url.removesuffix('.git')} (private)")
+        if item.pr_url:
+            lines.append(f"- Pull request: {item.pr_url}")
+        if item.status == "blocked" and item.feedback:
+            lines.append(f"- Blocked: {item.feedback.splitlines()[0][:200]}")
+        lines += ["", "_Automatic update; the decisions stay with the people who hold each role._"]
+        return "\n".join(lines)
 
     def _shipped_target(self, target: str) -> WorkItem:
         """The shipped app a change works on, or a FactoryError saying why it cannot."""
