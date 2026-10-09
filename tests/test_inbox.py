@@ -60,7 +60,7 @@ def test_labelled_issues_become_work_items_and_are_told_so(inbox):
     first = new[0]
     assert first.idea == "Employees record expenses." and first.issue_url.endswith("/issues/1")
     [comment] = f.host.comments[first.issue_url]
-    assert "Received by the AI software factory as work item `expense-log`" in comment
+    assert "Received by AI Software Factory as work item `expense-log`" in comment  # [factory] name
     assert "triage" in comment and first.issue_reported == "triage/active"
 
 
@@ -126,6 +126,7 @@ def test_gh_lists_labelled_open_issues(monkeypatch):
     calls = []
     answer = [
         {
+            "id": "I_kwDOAbc123",
             "number": 7,
             "title": "T",
             "body": None,
@@ -142,6 +143,7 @@ def test_gh_lists_labelled_open_issues(monkeypatch):
     monkeypatch.setattr(delivery.subprocess, "run", fake)
     [got] = GhCli().list_issues("a/b", "factory")
     assert got == {
+        "id": "I_kwDOAbc123",  # the stable identity the inbox dedupes on (A106)
         "number": 7,
         "title": "T",
         "body": "",

@@ -750,3 +750,36 @@ def test_gh_no_checks_is_an_empty_list_and_a_real_failure_is_an_error(monkeypatc
     gh_answer(monkeypatch, 0, "not json")
     with pytest.raises(DeliveryError, match="unreadable"):
         GhCli().pull_request_checks("u")
+
+
+# ------------------------------------------------------------------ audit lows A130, A131
+
+
+def test_republishing_after_the_pr_was_closed_opens_a_new_one(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    first = hosted.publish(ch, "it")
+    hosted.host.state = "CLOSED"  # a reviewer closed it on GitHub
+    again = hosted.publish(first, "it")
+    assert len(hosted.host.prs) == 2 and again.pr_state == "OPEN"
+    assert any("was closed on the host: opening a new one" in h["detail"] for h in again.history)
+
+
+def test_republishing_a_merged_pr_is_refused(hosted, tmp_path):
+    app, ch = migration(hosted, tmp_path)
+    hosted.publish(hosted.store.load(app.slug), "it")
+    first = hosted.publish(ch, "it")
+    hosted.host.state = "MERGED"
+    with pytest.raises(FactoryError, match="was merged on the host: run `factory sync"):
+        hosted.publish(first, "it")
+
+
+def test_accept_unverified_never_commits_a_secret(hosted):
+    item = shipped_app(hosted)
+    folder = hosted.app_dir(item)
+    item.approved_head = ""  # a legacy item, approved before heads were recorded
+    (folder / "leak.env").write_text("DB_PASSWORD=s3cr3tpass\n", encoding="utf-8")
+    head = git(folder, "rev-parse", "HEAD")
+    with pytest.raises(FactoryError, match="secrets in the uncommitted tree, nothing was committed"):
+        hosted.publish(item, "it", accept_unverified=True)
+    assert git(folder, "rev-parse", "HEAD") == head

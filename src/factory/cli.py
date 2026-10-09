@@ -20,7 +20,7 @@ from factory.importer import import_radar
 from factory.project import ProjectError, current_branch
 from factory.radar import MATURITIES, POLICY, RINGS, RadarError, load_radar, normalize
 from factory.sandbox import Sandbox
-from factory.workitem import ROLES, ItemNotFound, Store, WorkItem
+from factory.workitem import ROLES, ItemLocked, ItemNotFound, Store, WorkItem
 
 
 def _foreman(args: argparse.Namespace, runner_name: str | None = None) -> Foreman:
@@ -588,7 +588,16 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, RadarError, FactoryError, AgentError, EngineError, IdentityError, ItemNotFound) as e:
+    except (
+        ConfigError,
+        RadarError,
+        FactoryError,
+        AgentError,
+        EngineError,
+        IdentityError,
+        ItemNotFound,
+        ItemLocked,
+    ) as e:
         msg = e.args[0] if isinstance(e, ItemNotFound) and e.args else e
         print(f"error: {msg}", file=sys.stderr)
         return 2

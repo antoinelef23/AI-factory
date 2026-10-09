@@ -75,7 +75,8 @@ def test_re_approving_an_amended_spec_updates_the_frozen_hash(foreman):
     item = foreman.run(foreman.intake("X", "an api", "poc"))
     first = foreman.store.read(item, "spec.md")
     item = foreman.reject(item, "business", "add a rule")
-    foreman.store.write(item, "spec.md", first + "\n- **INV-9** — amended.\n")
+    # A lint-clean amendment: an uncovered new INV would now be refused at approval (audit A119).
+    foreman.store.write(item, "spec.md", first + "\n_Amended: the business clarified the wording._\n")
     item.stage = "spec_review"  # a regenerated spec waiting for approval again
     item = foreman.approve(item, "business")
     assert item.approved_hashes["spec.md"] == foreman._sha(foreman.store.read(item, "spec.md"))

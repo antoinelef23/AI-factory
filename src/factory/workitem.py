@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -66,6 +69,8 @@ class WorkItem:
         False  # IT merged the change branch (`factory merge`, or the pull request + `factory sync`)
     )
     issue_url: str = ""  # the GitHub issue this idea came from (`factory inbox`)
+    issue_id: str = ""  # its stable id on the host: survives a rename or transfer of the repository (A106)
+    issue_closed: bool = False  # the issue was closed or unlabelled: parked once, no more comments (A109)
     issue_reported: str = ""  # the last stage/status the factory commented on that issue
     repo: str = ""  # owner/name of the app's private repository once published
     repo_url: str = ""  # the remote the app pushes to
@@ -149,13 +154,51 @@ class WorkItem:
         return cls(**known)
 
 
+class ItemLocked(Exception):
+    """Another factory command is working on the same item or app."""
+
+
 class ItemNotFound(KeyError):
     """No such work item (a KeyError for the callers that already expect one; the CLI catches only this)."""
 
 
 class Store:
+    # A lock older than this is left over from a crashed command (the longest step, a Claudo run, is capped
+    # at an hour by default): it is taken over instead of blocking the item forever.
+    STALE_LOCK_SECONDS = 6 * 3600
+
     def __init__(self, work_dir: Path) -> None:
         self.work_dir = work_dir
+        self._held: set[str] = set()
+
+    @contextmanager
+    def lock(self, name: str) -> Iterator[None]:
+        """Exclusive across processes for the duration of one command (re-entrant within it): a cron `run`
+        and a human `approve` of the same item, or two `change`s of one app, no longer race and overwrite
+        each other's saves (audit A107, A112)."""
+        if name in self._held:
+            yield
+            return
+        path = self.work_dir / ".locks" / f"{name}.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if time.time() - path.stat().st_mtime < self.STALE_LOCK_SECONDS:
+                raise ItemLocked(
+                    f"another factory command is working on {name} (lock {path}); retry when it is done, or "
+                    "delete the lock file if no command is running"
+                ) from None
+            path.unlink(missing_ok=True)  # left over by a crashed command
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(f"pid {os.getpid()} at {now()}\n")
+        self._held.add(name)
+        try:
+            yield
+        finally:
+            self._held.discard(name)
+            path.unlink(missing_ok=True)
 
     def dir(self, slug: str) -> Path:
         return self.work_dir / slug

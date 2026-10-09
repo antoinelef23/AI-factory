@@ -123,12 +123,13 @@ class GhCli:
     def list_issues(self, repo: str, label: str) -> list[dict]:
         out = self._run(
             "issue", "list", "--repo", repo, "--label", label, "--state", "open", "--limit", str(ISSUE_LIMIT),
-            "--json", "number,title,body,author,url,labels",
+            "--json", "id,number,title,body,author,url,labels",
         )  # fmt: skip
         try:
             raw = json.loads(out or "[]")
             return [
                 {
+                    "id": str(i.get("id") or ""),
                     "number": int(i["number"]),
                     "title": str(i.get("title", "")),
                     "body": str(i.get("body") or ""),

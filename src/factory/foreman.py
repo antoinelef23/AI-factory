@@ -7,6 +7,7 @@ reason in `feedback`, which the next attempt receives.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import re
 import secrets
@@ -43,7 +44,15 @@ from factory.design import (
 )
 from factory.detect import SKIP_DIRS, pyproject_dependencies
 from factory.drift import Drift, migration_idea
-from factory.gates import Executor, GateResult, format_report, run_gates, secrets_in_history, shell_executor
+from factory.gates import (
+    Executor,
+    GateResult,
+    format_report,
+    run_gates,
+    secrets_gate,
+    secrets_in_history,
+    shell_executor,
+)
 from factory.guard import check_project, plan_radar_errors, plan_scope_errors
 from factory.identity import IdentityError, IdentityProvider, RoleMap
 from factory.judge import judge_panel
@@ -104,6 +113,18 @@ ENVIRONMENT_ERRORS = (
     OSError,
     ValueError,
 )
+
+
+def _locked(method):
+    """One command at a time on an item (and on the app it changes): see Store.lock."""
+
+    @functools.wraps(method)
+    def wrapper(self, item, *args, **kwargs):
+        with self.store.lock(f"item-{item.slug}"), self.store.lock(f"app-{item.target or item.slug}"):
+            return method(self, item, *args, **kwargs)
+
+    return wrapper
+
 
 APP_BUILD_COMMIT = """feat({slug}): the app built by the build agent
 
@@ -176,7 +197,19 @@ class Foreman:
 
     # ------------------------------------------------------------------ intake
     def intake(
-        self, title: str, idea: str, maturity: str = "poc", requester: str = "business", issue_url: str = ""
+        self,
+        title: str,
+        idea: str,
+        maturity: str = "poc",
+        requester: str = "business",
+        issue_url: str = "",
+        issue_id: str = "",
+    ) -> WorkItem:
+        with self.store.lock("intake"):  # two intakes never pick the same slug
+            return self._intake(title, idea, maturity, requester, issue_url, issue_id)
+
+    def _intake(
+        self, title: str, idea: str, maturity: str, requester: str, issue_url: str, issue_id: str
     ) -> WorkItem:
         if maturity not in MATURITIES:
             raise FactoryError(f"maturity must be one of {MATURITIES}")
@@ -189,6 +222,7 @@ class Foreman:
             maturity=maturity,
             requester=requester,
             issue_url=issue_url,
+            issue_id=issue_id,
         )
         item.log("intake", f"from GitHub issue {issue_url}" if issue_url else f"submitted by {requester}")
         self.store.save(item)
@@ -203,7 +237,8 @@ class Foreman:
         host = self._host()
         if not self.cfg.intake_repo:
             raise FactoryError('GitHub intake is off: set [intake] repo = "owner/name" in factory.toml')
-        known = {i.issue_url for i in self.store.all() if i.issue_url}
+        items = self.store.all()
+        known = {self._issue_key(i.issue_id, i.issue_url) for i in items if i.issue_url}
         new, skipped = [], []
         try:
             issues = host.list_issues(self.cfg.intake_repo, self.cfg.intake_label)
@@ -213,8 +248,9 @@ class Foreman:
             skipped.append(
                 f"{ISSUE_LIMIT} or more open issues: only the first {ISSUE_LIMIT} were read this time"
             )
+        self._park_withdrawn(items, {self._issue_key(i.get("id", ""), i["url"]) for i in issues})
         for issue in sorted(issues, key=lambda i: i["number"]):
-            if issue["url"] in known:
+            if self._issue_key(issue.get("id", ""), issue["url"]) in known:
                 continue
             reason = self._issue_refusal(issue)
             if reason:
@@ -226,11 +262,33 @@ class Foreman:
                 self._issue_maturity(issue),
                 requester=issue["author"] or "business",
                 issue_url=issue["url"],  # in the FIRST save: a crash after it never re-imports the issue
+                issue_id=issue.get("id", ""),
             )
             new.append(item)
         self.report_issues()
         skipped += self.issue_errors
         return [self.store.load(i.slug) for i in new], skipped  # as reported (issue_reported updated)
+
+    @staticmethod
+    def _issue_key(issue_id: str, url: str) -> str:
+        """An issue's identity: its host id when known (a renamed repository keeps it), else its URL."""
+        return issue_id or url.lower()
+
+    def _park_withdrawn(self, items: list[WorkItem], open_keys: set[str]) -> None:
+        """An imported item whose issue is no longer open and labelled: the request may be withdrawn. It is
+        parked once (blocked, said why) and its issue gets no more comments; `factory run` resumes it."""
+        for item in items:
+            key = self._issue_key(item.issue_id, item.issue_url)
+            if not item.issue_url or item.issue_closed or key in open_keys or item.status == "shipped":
+                continue
+            item.issue_closed = True
+            item.status = "blocked"
+            item.feedback = (
+                f"its issue {item.issue_url} was closed or unlabelled: the request may have been withdrawn. "
+                f"`factory run {item.slug}` resumes it if it is still wanted"
+            )
+            item.log("issue_closed", item.feedback)
+            self.store.save(item)
 
     def _issue_refusal(self, issue: dict) -> str:
         if not issue["title"].strip():
@@ -252,7 +310,7 @@ class Foreman:
         host = self._host()
         posted, self.issue_errors = 0, []
         for item in self.store.all():
-            if not item.issue_url:
+            if not item.issue_url or item.issue_closed:
                 continue
             state = f"{item.stage}/{item.status}"
             if state == item.issue_reported:
@@ -270,10 +328,7 @@ class Foreman:
 
     def _issue_comment(self, item: WorkItem) -> str:
         if not item.issue_reported:
-            head = (
-                f"Received by the AI software factory as work item `{item.slug}` "
-                f"(maturity `{item.maturity}`)."
-            )
+            head = f"Received by {self.cfg.name} as work item `{item.slug}` (maturity `{item.maturity}`)."
         else:
             head = f"Work item `{item.slug}` moved on."
         lines = [head, "", f"- Stage: **{describe_step(item.stage)}**", f"- Status: {item.status}"]
@@ -284,7 +339,13 @@ class Foreman:
         if item.pr_url:
             lines.append(f"- Pull request: {item.pr_url}")
         if item.status == "blocked" and item.feedback:
-            lines.append(f"- Blocked: {item.feedback.splitlines()[0][:200]}")
+            gates = re.findall(r"^\[(\w+)\]", item.feedback, re.M)
+            why = (
+                f"gates failed: {', '.join(gates)}"
+                if item.feedback.startswith("gates failed") and gates
+                else next((ln for ln in item.feedback.splitlines() if ln.strip()), "")
+            )
+            lines.append(f"- Blocked: {why[:200]}")
         lines += ["", "_Automatic update; the decisions stay with the people who hold each role._"]
         return "\n".join(lines)
 
@@ -306,7 +367,11 @@ class Foreman:
         """A feature, bug fix or migration for an EXISTING shipped app, through the same governed pipeline."""
         if kind not in CHANGE_KINDS:
             raise FactoryError(f"a change is one of {CHANGE_KINDS}, not {kind!r}")
-        target = target.strip().replace("\\", "/").strip("/").rsplit("/", 1)[-1]  # './orders/' is 'orders'
+        canonical = target.strip().replace("\\", "/").strip("/").rsplit("/", 1)[-1]
+        with self.store.lock(f"app-{canonical}"), self.store.lock("intake"):
+            return self._intake_change(canonical, title, idea, kind, requester)
+
+    def _intake_change(self, target: str, title: str, idea: str, kind: str, requester: str) -> WorkItem:
         if not title.strip() or not idea.strip():
             raise FactoryError("a change needs a title and a description")
         app_item = self._shipped_target(target)
@@ -343,6 +408,7 @@ class Foreman:
         if item.status == "abandoned":
             raise FactoryError(f"'{item.slug}' was abandoned: open a new change instead of reviving it")
 
+    @_locked
     def run(self, item: WorkItem, max_steps: int = 20) -> WorkItem:
         """Run automatic stages until a checkpoint, a failure, or shipped. Whatever goes wrong inside a step,
         the item is saved first (blocked, with what happened): nothing done or paid for is lost."""
@@ -482,6 +548,18 @@ class Foreman:
                 f"must decide as {role}"
             )
 
+    def _relint_before_freezing(self, item: WorkItem) -> None:
+        """A spec or plan edited in the store after it was generated is linted again before its hash becomes
+        the contract: no human approves a text the lint never saw (audit A119)."""
+        if item.stage == "spec_review":
+            result = lint_spec(self.store.read(item, "spec.md"), kind=item.kind)
+            if not result.ok:
+                raise FactoryError(f"spec.md no longer passes the structural lint:\n{result.feedback()}")
+        elif item.stage == "plan_review":
+            result = self._lint(item, self.store.read(item, "tasks.md"))
+            if result is not None and not result.ok:
+                raise FactoryError(f"tasks.md no longer passes the plan lint:\n{result.feedback()}")
+
     def _require_checkpoint(self, item: WorkItem, role: str) -> None:
         if role not in ROLES:
             raise FactoryError(f"role must be one of {ROLES}")
@@ -491,6 +569,7 @@ class Foreman:
         if step.role != role:
             raise FactoryError(f"stage '{item.stage}' must be decided by '{step.role}', not '{role}'")
 
+    @_locked
     def approve(self, item: WorkItem, role: str, by: str = "", note: str = "") -> WorkItem:
         self._refuse_abandoned(item)
         self._require_checkpoint(item, role)
@@ -502,6 +581,7 @@ class Foreman:
             item.it_exceptions = sorted(set(item.it_exceptions) | granted)
             for key in granted:  # an exception is a debt: it lapses unless the policy says never
                 self._set_terms(item, key, None, f"approved at design review: {note}".strip(": "), by or role)
+        self._relint_before_freezing(item)
         if item.stage == "spec_review":
             self._record_hash(item, "spec.md")  # the business contract, frozen at its approval
         if item.stage == "design_review":
@@ -600,6 +680,7 @@ class Foreman:
         if app.is_dir():
             item.approved_head = head_sha(app)
 
+    @_locked
     def reject(self, item: WorkItem, role: str, reason: str, by: str = "") -> WorkItem:
         self._refuse_abandoned(item)
         self._require_checkpoint(item, role)
@@ -626,6 +707,7 @@ class Foreman:
             "by": by,
         }
 
+    @_locked
     def allow(
         self,
         item: WorkItem,
@@ -657,6 +739,7 @@ class Foreman:
         self.store.save(item)
         return item
 
+    @_locked
     def promote(self, item: WorkItem, to: str, role: str, by: str = "") -> WorkItem:
         """POV -> POC -> MVP -> prod: back through design with the stricter rules."""
         if role != "it":
@@ -706,8 +789,8 @@ class Foreman:
         must be justified by a verbatim quote of the idea; anything else is dropped. Keywords stay the floor;
         the technology choice stays deterministic (the radar compiles the design)."""
         offered = [c for c in OPTIONAL_CAPABILITIES if self.radar.by_category(c)]
-        if self.runner is None or not offered or not self.cfg.capability_analyst:
-            return []
+        if self.runner is None or not offered or not self.cfg.capability_analyst or item.kind != "app":
+            return []  # a change's design keeps its app's stack: its capabilities would be discarded (A124)
         result = self.runner.run(
             capabilities_prompt(item.idea, offered),
             cwd=self.store.dir(item.slug),
@@ -744,9 +827,17 @@ class Foreman:
             f"; {'; '.join(notes)}" if notes else ""
         )
 
+    def _forget_reviews(self, item: WorkItem, kind: str) -> None:
+        """A regenerated artifact never sits next to its predecessor's lint report or judge verdict (A125)."""
+        lint = {"spec": "spec-lint.md", "plan": "plan-lint.md"}[kind]
+        for name in (lint, f"judge-{kind}.md"):
+            (self.store.dir(item.slug) / name).unlink(missing_ok=True)
+        item.judgements.pop(kind, None)
+
     def _do_spec(self, item: WorkItem) -> tuple[bool, str]:
         """Write spec.md. It must pass the structural lint before a human sees it: an agent spec that fails is
         re-prompted with the errors (spec_lint_retries), then blocked."""
+        self._forget_reviews(item, "spec")
         base_feedback = self._prompt_feedback(item)
         feedback, tries = base_feedback, 0
         while True:
@@ -870,6 +961,7 @@ class Foreman:
     def _do_plan(self, item: WorkItem) -> tuple[bool, str]:
         """Write tasks.md. With Claudo available the plan must pass ITS plan-lint before a human sees
         it: an agent plan is re-prompted with the lint errors (plan_lint_retries), then blocked."""
+        self._forget_reviews(item, "plan")
         spec_ids = sorted(set(SPEC_ID.findall(self.store.read(item, "spec.md"))))
         base_feedback = self._prompt_feedback(item)
         feedback, lint, tries, lint_clean = base_feedback, None, 0, ""
@@ -1126,6 +1218,7 @@ class Foreman:
             self._add_ack(item, "fixed_after_review", f"{listed}: changed after Claudo's review")
         return True, f"{where}; built by agent (${result.cost_usd:.2f}), {len(committed)} file(s) changed"
 
+    @_locked
     def merge(self, item: WorkItem, role: str, by: str = "") -> WorkItem:
         """IT merges an approved change into the app's base branch (fast-forward only).
 
@@ -1178,6 +1271,7 @@ class Foreman:
             raise FactoryError('delivery is off: set [delivery] provider = "github" in factory.toml first')
         return self.host
 
+    @_locked
     def publish(self, item: WorkItem, role: str, by: str = "", accept_unverified: bool = False) -> WorkItem:
         """IT publishes: a shipped NEW app becomes a private repository, an approved CHANGE a pull request.
 
@@ -1247,6 +1341,11 @@ class Foreman:
             open_change = next((i for i in self.store.all() if i.change_open and i.target == item.slug), None)
             branch = open_change.base_branch if open_change and open_change.base_branch else "main"
         elif accept_unverified:
+            leak = secrets_gate(
+                app
+            )  # scanned BEFORE committing: a refusal must not leave a key in history (A130)
+            if not leak.ok:
+                raise FactoryError(f"secrets in the uncommitted tree, nothing was committed:\n{leak.detail}")
             commit_leftovers(app, item.slug)  # legacy item: IT takes responsibility for the tree as it is
         remote_branch = f"refs/remotes/origin/{branch}"
         rev_range = f"origin/{branch}..{branch}" if ref_exists(app, remote_branch) else branch
@@ -1259,7 +1358,7 @@ class Foreman:
                     f"{owner}/{name} already exists and was not created by this factory: refusing to push "
                     "into it. Choose another [delivery] repo_prefix, or push the app yourself"
                 )
-            description = f"{item.title} (built by the AI software factory; maturity {item.maturity})"
+            description = f"{item.title} (built by {self.cfg.name}; maturity {item.maturity})"
             item.repo_url = host.create_private_repo(owner, name, description)
             item.repo = f"{owner}/{name}"
             # Saved NOW: if the push below fails, the next publish must reuse this repository instead of
@@ -1332,11 +1431,20 @@ class Foreman:
         rev_range = (
             f"origin/{head}..{head}" if ref_exists(app, f"refs/remotes/origin/{head}") else f"{base}..{head}"
         )
+        if item.pr_url:
+            try:
+                item.pr_state = host.pull_request_state(item.pr_url)
+            except DeliveryError as e:
+                raise FactoryError(str(e)) from e
+            if item.pr_state == "MERGED":
+                raise FactoryError(f"{item.pr_url} was merged on the host: run `factory sync {item.slug}`")
         self._verify_publishable(item, app, head, rev_range, accept_unverified)
         push_branch(app, head, target.repo_url)
-        if item.pr_url:
+        if item.pr_url and item.pr_state != "CLOSED":
             item.log("published", f"IT {by}: branch updated, pull request {item.pr_url}".replace("  ", " "))
             return
+        if item.pr_url:  # closed on the host: a new pull request, never a silent push nobody reviews (A131)
+            item.log("published", f"the pull request {item.pr_url} was closed on the host: opening a new one")
         owner, name = target.repo.split("/", 1)
         item.pr_url = host.open_pull_request(
             owner,
@@ -1380,6 +1488,7 @@ class Foreman:
             item.log("ci", state + (f": {', '.join(failed)}" if failed else ""))
         item.ci_state, item.ci_failed = state, failed
 
+    @_locked
     def sync(self, item: WorkItem) -> WorkItem:
         """Read the pull request's state; once IT merged it on the host, fast-forward the local app to it."""
         host = self._host()
@@ -1429,6 +1538,7 @@ class Foreman:
             raise FactoryError(str(e)) from e
         item.pr_state = "CLOSED"
 
+    @_locked
     def abandon(
         self, item: WorkItem, role: str, reason: str, by: str = "", pr_closed: bool = False
     ) -> WorkItem:
