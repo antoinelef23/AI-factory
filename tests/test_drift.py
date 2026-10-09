@@ -184,14 +184,12 @@ def test_cli_drift_is_clean_then_fails_after_a_radar_change_and_can_open_a_migra
     out = capsys.readouterr().out
     assert "0 compliant, 1 drifted" in out and "orders" in out and "FastAPI" in out
     assert main(["drift", "--open"]) == 1 and "migration item: migrate-orders" in capsys.readouterr().out
-    # With the migration open, the app is "in flight": not judged again, but the check must NOT go green,
-    # because the violation is still there until the migration is merged.
+    # With the migration open but not branched yet, the app folder still holds the shipped app: it is still
+    # judged (audit A16), and the check must NOT go green until the migration is merged.
     assert main(["drift"]) == 1
     out = capsys.readouterr().out
-    assert (
-        "1 app(s) with a change in flight" in out
-        and "migration pending: migrate-orders-to-the-current-radar (for orders)" in out
-    )
+    assert "0 compliant, 1 drifted" in out and "change in flight" not in out
+    assert "migration pending: migrate-orders-to-the-current-radar (for orders)" in out
     assert main(["drift", "--open"]) == 1  # nothing new to open: no duplicate migration
     assert "migration item" not in capsys.readouterr().out
     assert main(["board"]) == 0 and "migrate-orders" in capsys.readouterr().out

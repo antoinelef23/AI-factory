@@ -17,6 +17,7 @@ from factory.foreman import FactoryError, Foreman, describe_step
 from factory.guard import check_project
 from factory.identity import GhIdentity, IdentityError, load_roles
 from factory.importer import import_radar
+from factory.project import ProjectError, current_branch
 from factory.radar import MATURITIES, POLICY, RINGS, RadarError, load_radar
 from factory.sandbox import Sandbox
 from factory.workitem import ROLES, ItemNotFound, Store, WorkItem
@@ -283,11 +284,25 @@ def cmd_radar_diff(args: argparse.Namespace) -> int:
     return 0
 
 
+def _apps_on_a_change_branch(items: list[WorkItem], apps_dir: Path) -> set[str]:
+    """Apps whose folder holds a change's work in progress (checked out on factory/<slug>): their tree is
+    not what shipped, so drift waits for the merge. An open change that has not branched yet hides nothing
+    (audit A16): the folder still holds the shipped app."""
+    flying = set()
+    for target in {i.target for i in items if i.change_open}:
+        try:
+            if current_branch(apps_dir / target).startswith("factory/"):
+                flying.add(target)
+        except ProjectError:
+            continue  # not a git project: nothing branched
+    return flying
+
+
 def cmd_drift(args: argparse.Namespace) -> int:
     """Re-check every shipped app against the CURRENT radar. Exit 1 when any app drifted (usable in CI)."""
     f = _foreman(args, "offline")
     items = f.store.all()
-    flying = {i.target for i in items if i.change_open}
+    flying = _apps_on_a_change_branch(items, f.cfg.apps_dir)
     drifted, clean = scan_drift(items, f.radar, f.cfg.apps_dir, in_flight=flying)
     print(f"Radar {f.radar.company} {f.radar.version}: {len(clean)} compliant, {len(drifted)} drifted")
     if flying:

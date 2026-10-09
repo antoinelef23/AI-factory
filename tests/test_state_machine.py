@@ -107,3 +107,12 @@ def test_the_spelled_target_is_stored_canonically(foreman):
     ch = foreman.intake_change(f"./{app.slug}/", "Add", "add a thing")
     assert ch.target == app.slug
     assert to_plan_review(foreman, ch).target == app.slug
+
+
+def test_an_open_change_on_a_folder_outside_git_hides_nothing_from_drift(tmp_path):
+    from factory.cli import _apps_on_a_change_branch
+    from factory.workitem import WorkItem
+
+    (tmp_path / "orders").mkdir()
+    change = WorkItem(slug="add", title="Add", idea="i", maturity="poc", kind="feature", target="orders")
+    assert _apps_on_a_change_branch([change], tmp_path) == set()

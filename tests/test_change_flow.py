@@ -422,7 +422,12 @@ def test_cli_abandon_and_drift_in_flight_message(cli_env, capsys):
     assert main(["change", "orders", "Add", "--idea", "x"]) == 0
     assert main(["run", "add"]) == 0
     capsys.readouterr()
-    assert main(["drift"]) == 0  # a feature in flight is not a migration: nothing pending against the radar
+    assert main(["drift"]) == 0  # a feature is not a migration: nothing pending against the radar
+    assert "change in flight" not in capsys.readouterr().out  # not branched yet: the app is judged (A16)
+    for argv in (["approve", "add", "--as", "business"], ["approve", "add", "--as", "owner"]):
+        assert main(argv) == 0  # built on its branch: now the folder holds work in progress
+    capsys.readouterr()
+    assert main(["drift"]) == 0
     assert "1 app(s) with a change in flight" in capsys.readouterr().out
     assert main(["abandon", "add", "--as", "owner", "--reason", "not needed"]) == 0
     assert "orders is free for another change" in capsys.readouterr().out
