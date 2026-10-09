@@ -14,6 +14,7 @@ from factory.claudo import (
     secret_path,
     state_dir,
 )
+from factory.project import porcelain
 from tests.conftest import VALID_SPEC, FakeAgentRunner
 
 OK_PLAN = "---\ntype: tasks\nstatus: proposed\n---\n### T1 — Build\n- **depends_on :** []\n"
@@ -381,3 +382,28 @@ def test_the_foreman_migrates_a_legacy_secret_when_it_signs(foreman):
     legacy.parent.mkdir(parents=True)
     legacy.write_text("legacy-secret\n", encoding="utf-8")
     assert foreman._signing_secret() == "legacy-secret" and not legacy.exists()
+
+
+class EditingFixAgent(PlanThenBuildAgent):
+    """Its targeted fix really edits the app, as the live run's agent did."""
+
+    def run(self, prompt, **kw):
+        if "implementer of" in prompt:
+            (kw["cwd"] / "app" / "fixed.py").write_text("FIXED = True\n", encoding="utf-8")
+        return super().run(prompt, **kw)
+
+
+def test_a_targeted_fix_is_committed_apart_and_shown_to_it(foreman):
+    from tests.conftest import ScriptedExecutor
+
+    foreman.executor = ScriptedExecutor([(1, "E501 line too long"), (0, "ok")])
+    item = at_ship_review(foreman, ScriptedClaudo(), EditingFixAgent())
+    app = foreman.app_dir(item)
+    assert (item.stage, item.status) == ("ship_review", "waiting")
+    assert porcelain(app) == []  # the clean-tree gate sees a committed tree
+    subject = subprocess.run(
+        ["git", "log", "-1", "--format=%s"], cwd=app, capture_output=True, text=True
+    ).stdout.strip()
+    assert subject == f"fix({item.slug}): targeted fix after a failed factory gate"
+    acks = [a for a in item.ship_acks if a["kind"] == "fixed_after_review"]
+    assert acks and "app/fixed.py" in acks[0]["detail"]

@@ -90,6 +90,15 @@ from factory.templates import (
 )
 from factory.workitem import ROLES, STEP_BY_NAME, STEPS, Store, WorkItem
 
+FIX_AFTER_REVIEW_COMMIT = """fix({slug}): targeted fix after a failed factory gate
+
+Why: Claudo built the plan and its reviewer passed, then a factory gate failed; one agent fixed what the gate
+reported. Committed apart so IT sees exactly what changed after Claudo's review.
+
+Artifacts: {files}
+Run: auto
+"""
+
 RESTORE_PLAN_COMMIT = """chore({slug}): restore the approved plan
 
 Why: tasks.md was edited inside the app after the owner approved it. The approved plan is put back (its run
@@ -1375,6 +1384,17 @@ class Foreman:
         if not result.ok:
             return False, f"{detail}; build agent failed: {result.error}"
         self.store.write(item, "build-summary.md", result.text.strip() + "\n")
+        if item.claudo_cp and (app / ".git").exists():
+            # A fix after Claudo's run: committed (the clean-tree gate ships commits only) and shown to IT,
+            # because Claudo's reviewer never saw it.
+            fixed = commit_all(app, FIX_AFTER_REVIEW_COMMIT.replace("{slug}", item.slug))
+            if fixed:
+                listed = ", ".join(fixed[:8]) + (f" (+{len(fixed) - 8} more)" if len(fixed) > 8 else "")
+                self._add_ack(item, "fixed_after_review", f"{listed}: changed after Claudo's review")
+                return (
+                    True,
+                    f"{detail}; fixed by agent after Claudo's review (${result.cost_usd:.2f}): {listed}",
+                )
         return True, f"{detail}; built by agent (${result.cost_usd:.2f})"
 
     def _containment(self, item: WorkItem) -> str:
