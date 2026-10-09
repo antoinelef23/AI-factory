@@ -8,6 +8,7 @@ Sources, from strongest to weakest evidence:
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
@@ -33,7 +34,10 @@ SKIP_DIRS = {
 _DEP_NAME = re.compile(r"^\s*([A-Za-z0-9@][A-Za-z0-9._/@-]*)")
 _PY_IMPORT = re.compile(r"^\s*(?:from\s+([A-Za-z_][\w.]*)\s+import\b|import\s+([A-Za-z_][\w.]*))", re.M)
 _JS_IMPORT = re.compile(r"""(?:\bfrom\s+|\bimport\s+|\brequire\(\s*)['"]([^'"]+)['"]""")
-_FROM = re.compile(r"^\s*FROM\s+(?:--\S+\s+)*(\S+)", re.I | re.M)
+_FROM = re.compile(r"^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?", re.I | re.M)
+_ARG = re.compile(r"^\s*ARG\s+([A-Za-z_]\w*)(?:=(\S+))?", re.I | re.M)
+_COPY_FROM = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*?--from=(\S+)", re.I | re.M)
+_ARG_REF = re.compile(r"\$\{?([A-Za-z_]\w*)\}?")
 _COMPOSE_IMAGE = re.compile(r"^\s*image:\s*['\"]?([^\s'\"#]+)", re.M)
 
 
@@ -108,8 +112,12 @@ def _pyproject(text: str) -> list[str]:
         specs += group
     for group in data.get("dependency-groups", {}).values():
         specs += [s for s in group if isinstance(s, str)]
+    tool = data.get("tool", {})
+    specs += list(tool.get("uv", {}).get("dev-dependencies", []))  # the pre-PEP 735 uv form (audit A102)
+    for group in tool.get("pdm", {}).get("dev-dependencies", {}).values():
+        specs += list(group)
     names = [n for n in map(_dep_name, specs) if n]
-    poetry = data.get("tool", {}).get("poetry", {})
+    poetry = tool.get("poetry", {})
     for table in (
         poetry.get("dependencies", {}),
         poetry.get("dev-dependencies", {}),
@@ -122,17 +130,36 @@ def _pyproject(text: str) -> list[str]:
 pyproject_dependencies = _pyproject  # public name: the names of every declared dependency
 
 
-def _requirements(text: str) -> list[str]:
-    lines = (ln.split("#")[0].strip() for ln in text.splitlines())
-    return [n for n in (_dep_name(ln) for ln in lines if ln and not ln.startswith("-")) if n]
+def _requirements(text: str) -> tuple[list[str], list[str]]:
+    """(dependency names, lines the radar cannot resolve to a name). `-r`/`-c` name other files (scanned on
+    their own); `-e`/`--editable` installs a path or VCS URL: named by its #egg= when it has one, otherwise
+    a blind spot that is reported, never dropped (audit A20)."""
+    names, blind = [], []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith(("-e ", "--editable")):
+            egg = re.search(r"[#&]egg=([A-Za-z0-9._-]+)", line)
+            (names if egg else blind).append(egg.group(1) if egg else line)
+            continue
+        if line.startswith("-"):
+            continue  # -r / -c / --index-url / --hash: options, not dependencies
+        name = _dep_name(line.split(" #")[0])
+        if name:
+            names.append(name)
+    return names, blind
 
 
 def _package_json(text: str) -> list[str]:
     data = json.loads(text)
     names: list[str] = []
-    for key in ("dependencies", "devDependencies", "peerDependencies"):
+    for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
         names += list(data.get(key, {}))
-    return names
+    for key in ("bundledDependencies", "bundleDependencies"):  # a list of names (or true: all of the above)
+        bundled = data.get(key, [])
+        names += [n for n in bundled if isinstance(n, str)] if isinstance(bundled, list) else []
+    return list(dict.fromkeys(names))
 
 
 def _js_module(spec: str) -> str | None:
@@ -144,6 +171,11 @@ def _js_module(spec: str) -> str | None:
 
 # Manifests of ecosystems the radar does not analyse: silently ignoring them would be a blind spot.
 UNANALYSED_MANIFESTS = {
+    "pipfile",
+    "setup.py",
+    "setup.cfg",
+    "environment.yml",
+    "environment.yaml",
     "go.mod",
     "pom.xml",
     "build.gradle",
@@ -154,10 +186,63 @@ UNANALYSED_MANIFESTS = {
 }
 
 
-def _is_analysed_manifest(name: str) -> bool:
-    return name in ("pyproject.toml", "package.json") or (
-        name.startswith("requirements") and name.endswith(".txt")
+def _is_requirements(rel: str) -> bool:
+    """requirements*.txt, constraints*.txt, or any .txt under a requirements/ folder (audit A20, A21)."""
+    parts = rel.lower().split("/")
+    name = parts[-1]
+    return name.endswith(".txt") and (
+        name.startswith(("requirements", "constraints")) or "requirements" in parts[:-1]
     )
+
+
+def _is_analysed_manifest(name: str, rel: str = "") -> bool:
+    return name in ("pyproject.toml", "package.json") or _is_requirements(rel or name)
+
+
+def _dockerfile_images(text: str, rel: str) -> list[Finding]:
+    """Base images of a Dockerfile. A stage alias (`FROM builder`, `COPY --from=builder`) is not an image;
+    `${ARG}` resolves to the ARG's default; what cannot be resolved is a blind spot, reported (A22-A24,
+    A100: `COPY --from=<image>` pulls an image too)."""
+    args = {name: default for name, default in _ARG.findall(text) if default}
+    stages: set[str] = set()
+    found: list[Finding] = []
+
+    def image(ref: str) -> None:
+        if ref.isdigit() or ref.lower() in stages or ref.lower() == "scratch":
+            return
+        resolved = _ARG_REF.sub(lambda m: args.get(m.group(1), m.group(0)), ref)
+        if "$" in resolved:
+            found.append(Finding(f"image {ref} (an unresolved build argument)", rel, "unanalysed"))
+        else:
+            found.append(Finding(_image_name(resolved), rel, "image"))
+
+    for line in text.splitlines():
+        from_line = _FROM.match(line)
+        if from_line:
+            image(from_line.group(1))
+            if from_line.group(2):
+                stages.add(from_line.group(2).lower())
+            continue
+        copy = _COPY_FROM.match(line)
+        if copy:
+            image(copy.group(1))
+    return found
+
+
+def _python_imports(text: str) -> set[str]:
+    """Top-level modules a Python file imports (`import a, b` counts both: audit A98, A99). A file that does
+    not parse falls back to the line regex."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return {(a or b).split(".")[0] for a, b in _PY_IMPORT.findall(text)}
+    mods: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            mods.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            mods.add(node.module.split(".")[0])
+    return mods
 
 
 def scan_file(path: Path, rel: str) -> list[Finding]:
@@ -166,25 +251,27 @@ def scan_file(path: Path, rel: str) -> list[Finding]:
         text = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
         # An unreadable manifest must not read as "no dependencies": that would pass the radar gate.
-        return [Finding(rel, rel, "error")] if _is_analysed_manifest(name) else []
+        return [Finding(rel, rel, "error")] if _is_analysed_manifest(name, rel) else []
     if name in UNANALYSED_MANIFESTS:
         return [Finding(path.name, rel, "unanalysed")]
     try:
         if name == "pyproject.toml":
             return [Finding(n, rel, "manifest") for n in _pyproject(text)]
-        if name.startswith("requirements") and name.endswith(".txt"):
-            return [Finding(n, rel, "manifest") for n in _requirements(text)]
+        if _is_requirements(rel):
+            names, blind = _requirements(text)
+            return [Finding(n, rel, "manifest") for n in names] + [
+                Finding(f"editable install {b}", rel, "unanalysed") for b in blind
+            ]
         if name == "package.json":
             return [Finding(n, rel, "manifest") for n in _package_json(text)]
     except (tomllib.TOMLDecodeError, json.JSONDecodeError, TypeError, AttributeError):
         return [Finding(rel, rel, "error")]  # the radar cannot see this manifest: reported, never ignored
     if name.startswith("dockerfile") or name.endswith(".dockerfile"):
-        return [Finding(_image_name(m), rel, "image") for m in _FROM.findall(text) if m.lower() != "scratch"]
+        return _dockerfile_images(text, rel)
     if name.startswith(("docker-compose", "compose")) and name.endswith((".yml", ".yaml")):
         return [Finding(_image_name(m), rel, "image") for m in _COMPOSE_IMAGE.findall(text)]
     if name.endswith(".py"):
-        mods = {(a or b).split(".")[0] for a, b in _PY_IMPORT.findall(text)}
-        return [Finding(m, rel, "import") for m in sorted(mods)]
+        return [Finding(m, rel, "import") for m in sorted(_python_imports(text))]
     if name.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
         mods = {m for m in map(_js_module, _JS_IMPORT.findall(text)) if m}
         return [Finding(m, rel, "import") for m in sorted(mods)]

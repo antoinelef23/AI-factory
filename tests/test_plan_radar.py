@@ -162,8 +162,8 @@ def test_non_ambiguous_hold_technologies_still_match_in_prose(radar):
     ]
 
 
-def test_the_radar_file_marks_only_requests_as_strict(radar):
-    assert [t.id for t in radar.techs if t.text_strict] == ["requests"]
+def test_the_radar_file_marks_only_everyday_words_as_strict(radar):
+    assert [t.id for t in radar.techs if t.text_strict] == ["uv", "requests"]
 
 
 @pytest.mark.parametrize(

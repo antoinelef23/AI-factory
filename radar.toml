@@ -91,6 +91,14 @@ ring = "adopt"
 match = ["node", "nodejs"]
 
 [[tech]]
+id = "uv"
+name = "uv (Python package manager)"
+category = "build"
+ring = "adopt"
+match = ["uv"]
+text_strict = true
+
+[[tech]]
 id = "vite"
 name = "Vite"
 category = "build"
