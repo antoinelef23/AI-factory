@@ -1,0 +1,9 @@
+# Golden path manifest: maintained by IT with the template it describes.
+# capabilities: what this template gives an app structure for (the factory picks the template covering the
+#   idea's optional needs: frontend, messaging...). techs: the radar ids it uses: if any is blocked at the item's
+#   maturity, the template is not offered. [gates.commands]: overrides of factory.toml's gate commands.
+name = "python-fastapi"
+description = "HTTP API: FastAPI, pytest, ruff"
+capabilities = ["language", "backend", "testing", "quality", "ci", "hosting"]
+techs = ["python", "fastapi", "pytest", "ruff"]
+priority = 0

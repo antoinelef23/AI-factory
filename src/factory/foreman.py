@@ -34,6 +34,8 @@ from factory.design import (
     detect_capabilities,
     existing_stack,
     grounded_capabilities,
+    load_golden_paths,
+    pick_golden_path,
     render_change_design,
     render_design,
 )
@@ -101,7 +103,10 @@ class FactoryError(Exception):
     pass
 
 
-TEXT_SUFFIXES = {".py", ".toml", ".md", ".yml", ".yaml", ".txt", ".cfg", ".ini", ".json", ""}
+TEXT_SUFFIXES = {
+    ".py", ".toml", ".md", ".yml", ".yaml", ".txt", ".cfg", ".ini", ".json", "",
+    ".ts", ".tsx", ".js", ".jsx", ".html", ".css",
+}  # fmt: skip
 
 
 class Foreman:
@@ -784,6 +789,13 @@ class Foreman:
         self.store.write(item, "tasks.md", text)
 
     def _golden_path(self, item: WorkItem) -> str | None:
+        """IT's template for this app: from the golden path manifests (golden.toml) when there are any, else
+        the radar's `golden_path` of the chosen backend/frontend/language."""
+        paths = load_golden_paths(self.cfg.golden_paths_dir)
+        if paths:
+            caps = item.capabilities or detect_capabilities(item.idea)
+            chosen = pick_golden_path(paths, self.radar, caps, item.maturity)
+            return chosen.name if chosen else None
         mentioned = self.radar.scan_text(item.idea)
         choice = choose_stack(
             self.radar, item.capabilities or detect_capabilities(item.idea), item.maturity, mentioned
@@ -1569,7 +1581,7 @@ class Foreman:
             maturity=item.maturity,
             exceptions=item.active_exceptions(self.today()),
             docs=[app / "work" / item.slug / "design.md"],
-            commands=self.cfg.gate_commands,
+            commands={**self.cfg.gate_commands, **golden_gate_commands(app)},
             executor=self.executor,
             extra={
                 "immutable": lambda: self._immutability_gate(item),
@@ -1597,6 +1609,17 @@ class Foreman:
         item.gated_sha = head_sha(app)
         self.judge_artifact(item, "build")
         return True, "gates passed: " + ", ".join(r.name for r in results)
+
+
+def golden_gate_commands(app: Path) -> dict[str, str]:
+    """Gate command overrides the app's golden path carries in its own golden.toml (e.g. frontend tests)."""
+    import tomllib
+
+    manifest = app / "golden.toml"
+    if not manifest.is_file():
+        return {}
+    data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    return {k: str(v) for k, v in data.get("gates", {}).get("commands", {}).items()}
 
 
 def describe_step(stage: str) -> str:

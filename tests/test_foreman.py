@@ -27,7 +27,11 @@ def test_poc_end_to_end_offline(foreman, executor):
     assert (app / "app" / "main.py").is_file()
     assert (app / "work" / item.slug / "spec.md").is_file()  # triplet travels with the app (Claudo layout)
     assert item.slug in (app / "pyproject.toml").read_text(encoding="utf-8")  # placeholders rendered
-    assert [c for c, _ in executor.calls] == ["uv run --quiet pytest -q"]  # poc gates: radar, secrets, tests
+    # poc gates: radar, secrets, tests. This idea has a frontend, so it got the fullstack-react golden path,
+    # whose own golden.toml makes the tests gate run the frontend tests too.
+    assert (app / "web" / "package.json").is_file() and (app / "golden.toml").is_file()
+    [command] = [c for c, _ in executor.calls]
+    assert command.startswith("uv run --quiet pytest -q && npm --prefix web ci")
     assert [a["role"] for a in item.approvals] == ["business", "owner", "it"]
 
 

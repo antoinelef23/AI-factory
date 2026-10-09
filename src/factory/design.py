@@ -340,3 +340,60 @@ def render_change_design(
         ", ".join(gates) + ". No green gate, no ship. IT merges.",
     ]
     return "\n".join(lines) + "\n"
+
+
+# ------------------------------------------------------------------ golden path manifests (ROADMAP P3-8)
+
+
+@dataclass(frozen=True)
+class GoldenPath:
+    name: str
+    description: str
+    capabilities: tuple[str, ...]
+    techs: tuple[str, ...]
+    priority: int = 0
+    gate_commands: dict = field(default_factory=dict)
+
+
+def load_golden_paths(root: Path) -> list[GoldenPath]:
+    """Every golden path with a `golden.toml` manifest under `root` (IT's templates)."""
+    import tomllib
+
+    found = []
+    for manifest in sorted(root.glob("*/golden.toml")):
+        data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        found.append(
+            GoldenPath(
+                name=str(data.get("name") or manifest.parent.name),
+                description=str(data.get("description", "")),
+                capabilities=tuple(data.get("capabilities", [])),
+                techs=tuple(data.get("techs", [])),
+                priority=int(data.get("priority", 0)),
+                gate_commands=dict(data.get("gates", {}).get("commands", {})),
+            )
+        )
+    return found
+
+
+def pick_golden_path(
+    paths: list[GoldenPath], radar: Radar, capabilities: list[str], maturity: str
+) -> GoldenPath | None:
+    """The template that gives structure to the most of the idea's OPTIONAL needs (frontend, messaging...),
+    among those whose every technology the radar allows at `maturity` (an approval is fine, a block is not)
+    and that bring no optional capability the idea does not need. Ties: higher priority, then the name."""
+    needed_optional = set(capabilities) & set(OPTIONAL_CAPABILITIES)
+    eligible = []
+    for gp in paths:
+        techs = [radar.get(t) for t in gp.techs]
+        if any(t is None or verdict(t, maturity) == BLOCK for t in techs):
+            continue
+        extra = set(gp.capabilities) & set(OPTIONAL_CAPABILITIES) - needed_optional
+        if extra:
+            continue  # e.g. no React frontend for an API-only idea
+        eligible.append(gp)
+    if not eligible:
+        return None
+    return max(
+        eligible,
+        key=lambda gp: (len(needed_optional & set(gp.capabilities)), gp.priority, gp.name),
+    )

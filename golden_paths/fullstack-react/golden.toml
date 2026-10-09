@@ -1,0 +1,10 @@
+# Golden path manifest (see python-fastapi/golden.toml for the fields).
+name = "fullstack-react"
+description = "FastAPI backend + React frontend (Vite, TypeScript), tested with pytest and vitest"
+capabilities = ["language", "backend", "frontend", "testing", "quality", "ci", "hosting"]
+techs = ["python", "fastapi", "react", "typescript", "node", "vite", "vitest", "pytest", "ruff"]
+priority = 2
+
+[gates.commands]
+# The frontend's tests run with the backend's: `npm ci` installs exactly the locked packages.
+tests = "uv run --quiet pytest -q && npm --prefix web ci --silent --no-audit --no-fund && npm --prefix web test"

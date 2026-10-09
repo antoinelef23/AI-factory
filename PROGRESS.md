@@ -37,6 +37,11 @@ reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens 
   each with a verbatim quote of the idea (checked; ungrounded or unknown claims dropped); keywords stay the floor,
   failures fall back to them, the technology is still chosen by the radar. Live: the live1 idea (keywords missed
   its database) got `database` and `frontend`, both grounded, $0.017.
+- **P3-8 golden paths**: each template carries a `golden.toml` (capabilities, radar techs, gate overrides); the
+  factory picks the one covering the idea's optional needs among those whose techs the radar allows. New:
+  `fullstack-react` (FastAPI + React/Vite/TypeScript, pytest + vitest, its tests gate also runs `npm ci` + vitest)
+  and `python-worker` (broker-agnostic consumer + the mandated `/health`). Node.js, Vite and Vitest added to the
+  radar. Live: both scaffolded through the factory and their real gates passed (backend 1 + vitest 3; worker 4).
 
 ### After V-1/V-2 (2026-10-09, Opus): the live findings fixed, the judge as a panel
 - **Plan restore** (finding 1): the `## Run log` section is bookkeeping, but only its table rows, blank lines and
@@ -232,7 +237,7 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 - Capability detection: keywords plus, since 2026-10-09, an LLM analyst whose claims must quote the idea (live:
   the live1 idea now gets its database, $0.017). The stack is still compiled from the radar.
 - Claudo's two Opus reviews dominate MVP cost (above).
-- Only one golden path (python-fastapi).
+- Three golden paths since 2026-10-09 (python-fastapi, fullstack-react, python-worker); more are P3-8 follow-ups.
 
 - The Claudo reviewer still reads the tree BEFORE the factory commits leftovers. That is now harmless: what it
   missed is committed apart, flagged `scope_drift`, and IT must acknowledge it with a note.
@@ -249,4 +254,4 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 
 ## Next steps (in order)
 1. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
-2. P3-8 more golden paths.
+2. More golden paths on demand (the manifest makes adding one a folder + a golden.toml).

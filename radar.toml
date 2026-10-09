@@ -65,7 +65,7 @@ id = "react"
 name = "React"
 category = "frontend"
 ring = "adopt"
-match = ["react", "react-dom"]
+match = ["react", "react-dom", "@types/react", "@types/react-dom"]
 preferred = true
 
 [[tech]]
@@ -82,6 +82,27 @@ category = "frontend"
 ring = "hold"
 match = ["angularjs", "angular.js"]
 replaced_by = "react"
+
+[[tech]]
+id = "node"
+name = "Node.js (LTS)"
+category = "runtime"
+ring = "adopt"
+match = ["node", "nodejs"]
+
+[[tech]]
+id = "vite"
+name = "Vite"
+category = "build"
+ring = "adopt"
+match = ["vite", "@vitejs/plugin-react"]
+
+[[tech]]
+id = "vitest"
+name = "Vitest"
+category = "testing"
+ring = "adopt"
+match = ["vitest"]
 
 # ---------------------------------------------------------------- database
 [[tech]]

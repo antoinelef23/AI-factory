@@ -1,0 +1,8 @@
+# Golden path manifest (see python-fastapi/golden.toml for the fields).
+# The broker is NOT part of the template: the design picks it from the radar (messaging category) and an adapter
+# feeds the worker's Inbox. The template keeps the mandated GET /health endpoint.
+name = "python-worker"
+description = "Event worker: a broker-agnostic consumer loop with a FastAPI health endpoint"
+capabilities = ["language", "backend", "messaging", "testing", "quality", "ci", "hosting"]
+techs = ["python", "fastapi", "pytest", "ruff"]
+priority = 1

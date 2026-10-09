@@ -122,6 +122,20 @@ showing the change branch until IT merges, so `drift` marks that app *in flight*
 failing while a *migration* is pending, since the violation is still there. One open change per app.
 `factory drift --open` now opens migrations that you can simply `run`.
 
+## Golden paths
+
+IT's templates live in `golden_paths/`, each with a `golden.toml` (capabilities it scaffolds, the radar techs it
+uses, optional gate command overrides). The factory picks the template covering the idea's optional needs, among
+those whose every technology the radar allows at the item's maturity:
+
+| Golden path | For | Tests |
+|---|---|---|
+| `python-fastapi` | an HTTP API (default) | pytest |
+| `fullstack-react` | an idea with screens: FastAPI backend + React frontend (Vite, TypeScript) | pytest, then `npm ci` + vitest |
+| `python-worker` | an idea that consumes events: a broker-agnostic consumer loop + `GET /health` | pytest |
+
+Adding a template is a folder plus its `golden.toml`.
+
 ## Ideas from GitHub issues
 
 Business teams can file ideas as issues. Set `[intake] repo = "acme/ideas"` (and `[delivery] provider = "github"`):
