@@ -391,14 +391,10 @@ def post_approval_changes(app: Path, slug: str, since: str) -> list[str]:
         if name.startswith(f"work/{slug}/.runs/"):
             continue
         if name == f"work/{slug}/tasks.md":
-            diff = _git_raw(app, "diff", "-U0", since, "HEAD", "--", name)
-            for line in diff.splitlines():
-                if line.startswith(("+++", "---", "@@", "diff ", "index ")):
-                    continue
-                if line.startswith("+") and RUN_LOG_ROW.match(line[1:]):
-                    continue
+            before = _git_raw(app, "show", f"{since}:{name}")
+            after = _git_raw(app, "show", f"HEAD:{name}")
+            if plan_part(before) != plan_part(after):
                 problems.append(f"{name} (edited beyond run-log rows)")
-                break
             continue
         problems.append(name)
     return problems
@@ -455,3 +451,50 @@ def lock_dependencies(app: Path) -> tuple[int, str]:
     except subprocess.TimeoutExpired:
         return 124, "uv lock timed out"
     return p.returncode, (p.stdout + p.stderr)[-500:]
+
+
+RUN_LOG_HEADING = "## Run log"
+RUN_LOG_INTRO = "Claudo appends one row per node below"
+
+
+def split_run_log(text: str) -> tuple[str, str]:
+    """(plan, run log) of a tasks.md. The run log is what follows the `## Run log` heading, but only real log
+    content: table rows, blank lines and the section's intro line. Anything else written there (a `### T9`
+    task the orchestrator would execute, a changed instruction) is plan, so it is hashed and restored like
+    the rest. A plan without that heading (written before it existed) keeps Claudo's timestamped rows out of
+    the plan instead."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    start = next((i for i, ln in enumerate(lines) if ln.strip().startswith(RUN_LOG_HEADING)), None)
+    if start is None:
+        plan = [ln for ln in lines if not RUN_LOG_ROW.match(ln)]
+        return "\n".join(plan), "\n".join(ln for ln in lines if RUN_LOG_ROW.match(ln))
+    plan, log = lines[:start], [lines[start]]
+    for line in lines[start + 1 :]:
+        is_log = not line.strip() or line.lstrip().startswith("|") or line.startswith(RUN_LOG_INTRO)
+        (log if is_log else plan).append(line)
+    return "\n".join(plan), "\n".join(log)
+
+
+def plan_part(text: str) -> str:
+    """What the owner approved in a tasks.md: everything but the run log, trailing blank lines ignored."""
+    plan, _ = split_run_log(text)
+    return "\n".join(ln for ln in plan.split("\n") if not RUN_LOG_ROW.match(ln)).rstrip("\n")
+
+
+def merge_plan_copy(approved: str, current: str) -> str:
+    """The approved plan, carrying the run log already written in the app's copy (so re-copying the plan into
+    the app never erases Claudo's bookkeeping)."""
+    approved_plan, approved_log = split_run_log(approved)
+    _, current_log = split_run_log(current)
+    if not current_log.strip():
+        return approved
+    if current_log.lstrip().startswith(RUN_LOG_HEADING):
+        log = current_log
+    else:  # legacy copy: bare rows; keep them under the approved plan's own heading
+        log = (approved_log.rstrip("\n") + "\n" if approved_log.strip() else "") + current_log
+    return approved_plan.rstrip("\n") + "\n\n" + log.strip("\n") + "\n"
+
+
+def commit_paths(app: Path, paths: list[str], message: str) -> None:
+    """Commit exactly these paths (nothing else that happens to be uncommitted)."""
+    _commit_paths(app, paths, message)

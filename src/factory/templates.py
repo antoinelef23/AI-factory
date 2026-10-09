@@ -149,7 +149,9 @@ path adds fields such as `app` and `env`: require `status`, never an exact body)
 INV-1 = only technologies allowed by the company tech radar at maturity `{item.maturity}`.
 Do not choose technologies: that is the design's job.
 Every BHV must be something idea.md asks for: add no edge-case behaviour (trailing slashes, near-miss
-paths, extra HTTP methods, extra headers) that the idea does not request.{fb}
+paths, extra HTTP methods, extra headers) that the idea does not request.
+The Target KPI states only targets the idea gives: invent no request counts, latency limits, uptime or
+volumes; when the idea gives none, the KPI is that every behaviour passes its eval.{fb}
 Output ONLY the markdown of spec.md (frontmatter first: type: spec, feature: {item.slug},
 version: 0.1.0, status: draft), no commentary, no code fence.
 
@@ -380,7 +382,9 @@ BHV-1 = no regression (the existing test suite still passes). Do not choose tech
 Every BHV must be something idea.md asks for: add no edge-case behaviour (trailing slashes, near-miss
 paths, extra HTTP methods, extra headers) that the idea does not request. When the idea says existing
 behaviour must not change, every BHV must hold with the framework's DEFAULT behaviour: a BHV that could
-only pass by reconfiguring the app globally contradicts INV-3.{fb}
+only pass by reconfiguring the app globally contradicts INV-3.
+The Target KPI states only targets the idea gives: invent no request counts, latency limits, uptime or
+volumes; when the idea gives none, the KPI is that every behaviour passes its eval.{fb}
 Output ONLY the markdown of spec.md (frontmatter first: type: spec, feature: {item.slug},
 version: 0.1.0, status: draft), no commentary, no code fence.
 

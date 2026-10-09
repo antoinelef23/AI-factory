@@ -41,7 +41,6 @@ from factory.judge import judge
 from factory.project import (
     CHANGE_BUILD_COMMIT,
     CHANGE_TRIPLET_COMMIT,
-    RUN_LOG_ROW,
     ProjectError,
     abandon_change,
     add_remote,
@@ -49,11 +48,14 @@ from factory.project import (
     commit_all,
     commit_leftovers,
     commit_leftovers_split,
+    commit_paths,
     current_branch,
     head_sha,
     lock_dependencies,
     merge_fast_forward,
+    merge_plan_copy,
     modified_tests,
+    plan_part,
     porcelain,
     post_approval_changes,
     prepare_project,
@@ -79,6 +81,15 @@ from factory.templates import (
     with_run_log,
 )
 from factory.workitem import ROLES, STEP_BY_NAME, STEPS, Store, WorkItem
+
+RESTORE_PLAN_COMMIT = """chore({slug}): restore the approved plan
+
+Why: tasks.md was edited inside the app after the owner approved it. The approved plan is put back (its run
+log kept) so that what ships is governed by the approved contract; IT is told, because the orchestrator may
+have executed the edited version.
+
+Run: auto
+"""
 
 
 class FactoryError(Exception):
@@ -623,6 +634,16 @@ class Foreman:
     # ------------------------------------------------------------------ judge (advisory)
     def _judge_inputs(self, item: WorkItem, kind: str) -> tuple[str, str]:
         """(artifact text, extra context) for a judge call; ('', '') when there is nothing to judge."""
+        artifact, ctx = self._judge_material(item, kind)
+        if item.kind != "app" and artifact:
+            ctx = (
+                f"\nCONTEXT: this {kind} is for a {item.kind} to the EXISTING app `{item.target}`. It "
+                "describes only that delta: judge the delta against the idea. Rules that apply to NEW apps "
+                "only (such as the mandated `GET /health` behaviour) do not apply to it.\n" + ctx
+            )
+        return artifact, ctx
+
+    def _judge_material(self, item: WorkItem, kind: str) -> tuple[str, str]:
         if kind == "spec":
             return self.store.read(item, "spec.md"), ""
         if kind == "plan":
@@ -752,10 +773,7 @@ class Foreman:
             item.base_branch, item.base_sha = base, sha
         triplet = app / "work" / item.slug
         triplet.mkdir(parents=True, exist_ok=True)
-        for name in ("idea.md", "spec.md", "design.md", "tasks.md"):
-            text = self.store.read(item, name)
-            if text:
-                (triplet / name).write_text(text, encoding="utf-8", newline="\n")
+        self._copy_triplet(item, triplet)
         commit_all(app, CHANGE_TRIPLET_COMMIT.replace("{slug}", item.slug))
         where = f"branch factory/{item.slug} from {item.base_branch}"
         if self.runner is None:
@@ -1080,6 +1098,45 @@ class Foreman:
         self.store.save(item)
         return item
 
+    def _copy_triplet(self, item: WorkItem, triplet: Path) -> None:
+        """The approved artifacts travel with the code. tasks.md keeps the run log already in the app's copy:
+        a retry re-copying the plan must not erase Claudo's bookkeeping."""
+        for name in ("idea.md", "spec.md", "design.md", "tasks.md"):
+            text = self.store.read(item, name)
+            if not text:
+                continue
+            copy = triplet / name
+            if name == "tasks.md" and copy.is_file():
+                text = merge_plan_copy(text, copy.read_text(encoding="utf-8"))
+            copy.write_text(text, encoding="utf-8", newline="\n")
+
+    def _restore_edited_plan(self, item: WorkItem, app: Path) -> None:
+        """An agent edited the approved plan inside the app: put the approved plan back before the gates
+        run, deterministically (no agent run), keeping the run log, and flag it for IT: the orchestrator may
+        have executed the edited version. A plan changed in the store is a human matter: the immutable gate
+        says so."""
+        approved = item.approved_hashes.get("tasks.md")
+        copy = app / "work" / item.slug / "tasks.md"
+        store_text = self.store.read(item, "tasks.md")
+        if not approved or not copy.is_file() or self._contract_sha("tasks.md", store_text) != approved:
+            return
+        current = copy.read_text(encoding="utf-8")
+        if self._contract_sha("tasks.md", current) == approved:
+            return
+        edited = sorted(set(plan_part(current).split("\n")) - set(plan_part(store_text).split("\n")))
+        copy.write_text(merge_plan_copy(store_text, current), encoding="utf-8", newline="\n")
+        rel = f"work/{item.slug}/tasks.md"
+        if (app / ".git").exists() and rel in porcelain(app):
+            commit_paths(app, [rel], RESTORE_PLAN_COMMIT.replace("{slug}", item.slug))
+        sample = "; ".join(line.strip()[:80] for line in edited[:3] if line.strip()) or "lines removed"
+        item.log("plan_restored", f"tasks.md edited inside the app, approved plan restored ({sample})")
+        self._add_ack(
+            item,
+            "plan_edited",
+            f"tasks.md was edited inside the app after its approval and has been restored ({sample}); the "
+            "orchestrator may have run the edited plan: check the task commits",
+        )
+
     def _do_build(self, item: WorkItem) -> tuple[bool, str]:
         if item.build_attempts <= 1:
             # A first build starts clean. Retries and reworks keep their acks: the commits that caused
@@ -1092,10 +1149,7 @@ class Foreman:
         # The triplet travels with the app (Claudo layout: work/<feature>/).
         triplet = app / "work" / item.slug
         triplet.mkdir(parents=True, exist_ok=True)
-        for name in ("idea.md", "spec.md", "design.md", "tasks.md"):
-            text = self.store.read(item, name)
-            if text:
-                (triplet / name).write_text(text, encoding="utf-8", newline="\n")
+        self._copy_triplet(item, triplet)
         if self.runner is None:
             return True, f"{detail}; offline build (scaffold only, no agent)"
         # Claudo executes the approved plan task by task (DAG, per-task verify, evals, reviewer panel).
@@ -1298,9 +1352,7 @@ class Foreman:
         """Hash of an approved artifact. Claudo appends run-log rows to tasks.md as it works; those rows are
         bookkeeping, not part of the approved plan, so they are left out (and CRLF is normalised)."""
         if name == "tasks.md":
-            text = "\n".join(
-                ln for ln in text.replace("\r\n", "\n").split("\n") if not RUN_LOG_ROW.match(ln)
-            ).rstrip("\n")
+            text = plan_part(text)  # the `## Run log` section (and Claudo's rows) is bookkeeping
         return self._sha(text)
 
     def _record_hash(self, item: WorkItem, name: str) -> None:
@@ -1339,6 +1391,7 @@ class Foreman:
 
     def _do_gate(self, item: WorkItem) -> tuple[bool, str]:
         app = self.app_dir(item)
+        self._restore_edited_plan(item, app)
         results = run_gates(
             self.cfg.gates_for(item.maturity),
             app,

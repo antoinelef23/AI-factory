@@ -215,7 +215,12 @@ def test_editing_a_task_after_the_owner_approved_is_caught(foreman):
         plan.write_text(plan.read_text(encoding="utf-8").replace("###", "### (edited)", 1), encoding="utf-8")
 
     item = run_to_build(foreman, tamper=rewrite)
-    assert item.status == "blocked" and "tasks.md: modified inside the app" in item.feedback
+    # The approved plan is put back before the gates (no agent run) and IT must acknowledge the edit.
+    assert (item.stage, item.status) == ("ship_review", "waiting"), item.feedback
+    assert [a["kind"] for a in item.ship_acks] == ["plan_edited"]
+    copy = foreman.app_dir(item) / "work" / item.slug / "tasks.md"
+    assert "(edited)" not in copy.read_text(encoding="utf-8")
+    assert any(h["event"] == "plan_restored" for h in item.history)
 
 
 def test_a_plan_edited_in_the_store_after_approval_is_caught(foreman):
