@@ -21,6 +21,17 @@ Claudo (`AI-Workflow-gates/_build`, separate repo): `just gate-ci` green on Wind
 reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens flagged, agent environment test).
 **Push Claudo first**: the factory relies on them and says so on the item when they are missing.
 
+### After V-1/V-2 (2026-10-09, Opus): the live findings fixed, the judge as a panel
+- **Plan restore** (finding 1): the `## Run log` section is bookkeeping, but only its table rows, blank lines and
+  intro: a task written there is still plan (hashed, restored). An agent's untimed row no longer fails the immutable
+  gate; a real edit of the plan inside the app is put back before the gates, without an agent run, run log kept, and
+  becomes a `plan_edited` acknowledgement for IT; retries no longer erase Claudo's rows.
+- **Invented KPIs** (finding 2): both spec prompts allow only the targets the idea gives.
+- **Judge context** (finding 3): a change's artifacts are judged as a delta; new-app mandates do not apply.
+- **Judge panel**: `judge_votes = 3` (median per criterion, unreliable runs do not vote, every vote in the report);
+  the billed calibration can run as a panel (`JUDGE_VOTES=3`). Not measured live yet.
+Verified: `just check` 561 passed, 2 skipped (free; no billed call in this step).
+
 ### V-1 / V-2: the corrected factory on real Claudo and real GitHub (2026-10-08, Antoine's go)
 Scratch factory `live7` from frozen snapshots; `budget_usd = 3` per orchestrator run; judge on from MVP.
 - **App `ping-service` (MVP): $1.72.** Claudo PASS, all 7 gates, diff exactly the idea, `uv.lock` in the scaffold
@@ -211,8 +222,7 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   already have the recipe. Same class as J-5, not fixed: it would need a deliberate setup commit on the base.
 
 ## Next steps (in order)
-1. Fix the three findings of the live run above (plan restore without an agent, invented KPIs, judge context for
-   changes).
-2. The judge is noisy: several runs or a majority vote before trusting one verdict.
-3. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
-4. P2-5 GitHub issue intake; P3-3 version constraints / P3-4 licence policy from lockfiles; P3-8 more golden paths.
+1. Measure the judge panel: `JUDGE_VOTES=3 just calibrate` (billed, about $0.6) to see whether the median
+   steadies the calibration that single runs did not.
+2. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
+3. P2-5 GitHub issue intake; P3-3 version constraints / P3-4 licence policy from lockfiles; P3-8 more golden paths.

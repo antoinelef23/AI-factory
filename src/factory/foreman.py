@@ -37,7 +37,7 @@ from factory.detect import pyproject_dependencies
 from factory.drift import Drift, migration_idea
 from factory.gates import Executor, GateResult, format_report, run_gates, secrets_in_history, shell_executor
 from factory.guard import check_project, plan_radar_errors, plan_scope_errors
-from factory.judge import judge
+from factory.judge import judge_panel
 from factory.project import (
     CHANGE_BUILD_COMMIT,
     CHANGE_TRIPLET_COMMIT,
@@ -678,11 +678,12 @@ class Foreman:
         artifact, extra = self._judge_inputs(item, kind)
         if not artifact.strip():
             return None
-        report = judge(
+        report = judge_panel(
             self.runner,
             kind,
             artifact,
             item.idea,
+            votes=self.cfg.judge_votes,
             model=self.cfg.models.get("judge"),
             cwd=self.store.dir(item.slug),
             extra=extra,
@@ -693,6 +694,7 @@ class Foreman:
             "verdict": report.verdict,
             "average": round(report.average, 2),
             "summary": report.summary,
+            "votes": report.votes,
         }
         self.store.write(item, f"judge-{kind}.md", report.markdown())
         item.log("judged", report.short())

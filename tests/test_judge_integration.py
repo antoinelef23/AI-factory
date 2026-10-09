@@ -39,7 +39,9 @@ def test_spec_plan_and_build_are_judged_and_recorded(foreman):
     item = f.approve(item, "owner")  # build, gates, build judged
     assert set(item.judgements) == {"spec", "plan", "build"}
     assert [h["event"] for h in item.history].count("judged") == 3
-    assert item.cost_usd == pytest.approx(3 * 0.01 + 3 * 0.002)  # spec/plan/build agents + 3 judge calls
+    votes = f.cfg.judge_votes  # each artifact is judged by a panel of that many runs
+    assert len(judge_calls(runner)) == 3 * votes
+    assert item.cost_usd == pytest.approx(3 * 0.01 + 3 * votes * 0.002)  # 3 agents + the judge runs
     assert all(kw["model"] == "haiku" for _, kw in judge_calls(runner))  # judge model != generator model
 
 

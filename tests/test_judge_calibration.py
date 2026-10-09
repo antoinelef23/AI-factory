@@ -10,10 +10,12 @@ from pathlib import Path
 import pytest
 
 from factory.agents import ClaudeRunner
-from factory.judge import RUBRICS, CriterionScore, JudgeReport, judge
+from factory.judge import RUBRICS, CriterionScore, JudgeReport, judge_panel
 from tests.calibration import DEGRADATIONS, compare, grounded_scores
 
 FIXTURE = Path(__file__).resolve().parents[1] / "evals" / "judge_calibration" / "ping-service"
+# Billed runs: JUDGE_VOTES=3 calibrates the judge as the factory runs it (a panel, median per criterion).
+VOTES = int(os.environ.get("JUDGE_VOTES", "1"))
 SPEC = (FIXTURE / "spec.md").read_text(encoding="utf-8")
 IDEA = (FIXTURE / "idea.md").read_text(encoding="utf-8").split("## What the business wants")[1].strip()
 
@@ -121,7 +123,7 @@ def test_the_judge_notices_degraded_specs(capsys):
     runner = ClaudeRunner()
 
     def run(text):
-        return judge(runner, "spec", text, IDEA, model=model, cwd=FIXTURE)
+        return judge_panel(runner, "spec", text, IDEA, votes=VOTES, model=model, cwd=FIXTURE)
 
     base = run(SPEC)
     lines = [f"JUDGE MODEL {model}", f"baseline {base.verdict} {base.average:.2f} {grounded_scores(base)}"]
@@ -165,7 +167,7 @@ def test_the_about_fixture_is_the_spec_that_invented_an_edge_case():
 def test_the_judge_notices_an_edge_case_the_idea_never_asked_for(capsys):
     """Opt-in (billed, about $0.05-0.17). The judge must not wave this spec through on fidelity or scope."""
     model = os.environ.get("JUDGE_MODEL", "sonnet")
-    rep = judge(ClaudeRunner(), "spec", ABOUT_SPEC, ABOUT_IDEA, model=model, cwd=ABOUT)
+    rep = judge_panel(ClaudeRunner(), "spec", ABOUT_SPEC, ABOUT_IDEA, votes=VOTES, model=model, cwd=ABOUT)
     scores = grounded_scores(rep)
     with capsys.disabled():
         print(f"\nabout-endpoint {rep.verdict} {rep.average:.2f} {scores} cost ${rep.cost_usd:.2f}")

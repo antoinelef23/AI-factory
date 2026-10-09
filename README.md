@@ -203,6 +203,13 @@ ungrounded scores are discarded) and the verdict is computed from the scores. It
 haiku's answers were unreliable (ungrounded quotes), so the default judge is sonnet. It is weakest at noticing a
 *missing* evals table (deterministic checks cover structure better), and it shares a model family with the generators.
 
+`[agent] judge_from = "mvp"` turns it on automatically from MVP up. **One run is noisy** (two calibrations on
+2026-10-08 moved by a whole criterion), so it runs as a panel: `[agent] judge_votes = 3` judges each artifact three
+times and keeps the **median** score per criterion; the verdict follows the medians, unreliable runs do not vote,
+and a majority of unreliable runs makes the panel unreliable. The report lists every vote. About 3x the cost of one
+judgement. To calibrate the panel as it runs: `JUDGE_VOTES=3 just calibrate`. For a change, the judge is told it
+reviews a delta to an existing app, so new-app rules (the mandated `/health`) do not count against it.
+
 `uv run factory judge <slug> --kind spec|plan|build` runs it on demand.
 
 ## What it costs (measured, Sonnet generators)

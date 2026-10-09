@@ -15,6 +15,10 @@ judge = false                     # LLM-as-judge on spec/plan/build (advisory, b
 # Judge every spec/plan/build automatically from this maturity up, without turning the judge on for POV/POC
 # (about $0.05-0.17 per judged artifact). Empty = off. Antoine chose "mvp" on 2026-10-08.
 judge_from = "mvp"
+# Independent judge runs per artifact; each criterion keeps the median score. One run is noisy (the
+# 2026-10-08 calibrations moved by a whole criterion between runs), so 3 by default: about 3x the cost of
+# one judgement (roughly $0.10-0.25 per judged artifact). 1 = a single run.
+judge_votes = 3
 # judge_thinking_tokens: unset = model default. Measured on one real spec (haiku): default thinking ~$0.08 and
 # caught invented requirements; budget 3000 ~$0.05; budget 0 ~$0.02 but MISSED them (fidelity 5). Cheap judging
 # is a false economy, so leave it unset unless you re-run the calibration.

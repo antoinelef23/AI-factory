@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import statistics
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
@@ -86,6 +87,7 @@ class JudgeReport:
     cost_usd: float = 0.0
     model: str = ""
     raw: str = ""  # the judge's answer, kept (truncated) so an unreliable verdict can be audited
+    votes: list[str] = field(default_factory=list)  # each vote's verdict when the judge ran as a panel
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -93,11 +95,17 @@ class JudgeReport:
     def short(self) -> str:
         weak = [f"{c.id}={c.score}" for c in self.criteria if c.grounded and c.score < PASS_MIN]
         tail = f" weak: {', '.join(weak)}" if weak else ""
-        return f"judge {self.kind}: {self.verdict} ({self.average:.1f}/5){tail}"
+        panel = f" [votes: {', '.join(self.votes)}]" if len(self.votes) > 1 else ""
+        return f"judge {self.kind}: {self.verdict} ({self.average:.1f}/5){tail}{panel}"
 
     def markdown(self) -> str:
         out = [f"# Judge report: {self.kind} ({self.verdict}, {self.average:.1f}/5)", ""]
         out.append(f"_Advisory only. Model: {self.model or 'n/a'}, cost ${self.cost_usd:.3f}._")
+        if len(self.votes) > 1:
+            out.append(
+                f"_Panel of {len(self.votes)} runs ({', '.join(self.votes)}): each score is the median of "
+                "the grounded scores of the reliable runs._"
+            )
         out += ["", self.summary, "", "| criterion | score | grounded | evidence |", "|---|---|---|---|"]
         for c in self.criteria:
             out.append(
@@ -264,3 +272,63 @@ def judge(
         report.raw = result.text[:6000]
     report.cost_usd, report.model = result.cost_usd, model or ""
     return report
+
+
+def combine(kind: str, reports: list[JudgeReport]) -> JudgeReport:
+    """One verdict from several runs of the judge on the same artifact.
+
+    A single run is noisy (the 2026-10-08 calibrations moved by a whole criterion between runs), so: each
+    criterion takes the MEDIAN of its grounded scores across the reliable runs, and the verdict is computed
+    from those medians by the usual rule. If most runs are unreliable, the panel is unreliable."""
+    if len(reports) == 1:
+        return reports[0]
+    out = JudgeReport(kind=kind, model=reports[0].model, votes=[r.verdict for r in reports])
+    out.cost_usd = sum(r.cost_usd for r in reports)
+    reliable = [r for r in reports if r.verdict != "unreliable"]
+    for r in reports:
+        out.problems += [p for p in r.problems if p not in out.problems]
+    if len(reliable) * 2 <= len(reports):
+        out.verdict = "unreliable"
+        out.raw = next((r.raw for r in reports if r.raw), "")
+        out.summary = f"{len(reports) - len(reliable)} of {len(reports)} runs were unreliable"
+        return out
+    for cid, _ in RUBRICS[kind]:
+        scored = [(c.score, c) for r in reliable for c in r.criteria if c.id == cid and c.grounded]
+        if not scored:
+            continue
+        median = statistics.median_low(sorted(score for score, _ in scored))
+        chosen = next(c for score, c in scored if score == median)
+        votes = ", ".join(str(score) for score, _ in scored)
+        out.criteria.append(
+            CriterionScore(cid, median, f"{chosen.evidence} (scores: {votes})", chosen.quote, True)
+        )
+    if len(out.criteria) * 2 <= len(RUBRICS[kind]):
+        out.verdict = "unreliable"
+        out.summary = "too few criteria were scored with a grounded quote across the runs"
+        return out
+    out.verdict, out.average = compute_verdict([c.score for c in out.criteria])
+    agreeing = [r for r in reliable if r.verdict == out.verdict] or reliable
+    out.summary = agreeing[0].summary
+    return out
+
+
+def judge_panel(
+    runner: JudgeRunner,
+    kind: str,
+    artifact: str,
+    idea: str,
+    *,
+    votes: int,
+    model: str | None,
+    cwd,
+    extra: str = "",
+    thinking_tokens: int | None = None,
+) -> JudgeReport:
+    """`votes` independent runs of the judge, combined (median per criterion). votes = 1 is one plain run."""
+    reports = [
+        judge(
+            runner, kind, artifact, idea, model=model, cwd=cwd, extra=extra, thinking_tokens=thinking_tokens
+        )
+        for _ in range(max(1, votes))
+    ]
+    return combine(kind, reports)
