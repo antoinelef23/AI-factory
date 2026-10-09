@@ -622,7 +622,9 @@ All figures are planning assumptions to replace with measurements from phase 0.
 
 ## 10. Next 10 tasks
 
-In order, each verifiable:
+**Superseded on 2026-10-09 by [HARDENING.md](HARDENING.md)** (work order from the audit: H1 trust boundary,
+H2 containment record, H3 escaping, H4 state machine, H5 fail-closed detectors, H6 golden-path images, H7 tests and
+docs). The list below is the original v0.1 order, all done; kept for history.
 
 1. **P0-1** Run tonight's live test (README section 2); record cost, duration, failures in PROGRESS.md.
 2. **P0-5** Decide D1, add the license, make the first commit.

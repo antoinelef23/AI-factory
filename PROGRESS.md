@@ -273,7 +273,13 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   already have the recipe. Same class as J-5, not fixed: it would need a deliberate setup commit on the base.
 
 ## Next steps (in order)
-1. Antoine: decide the live item `utc-clock` (scratch live8, at IT's ship review, reviewer BLOCK made stale by the
-   targeted fix, `fixed_after_review` needs a note). Claudo ca576da waits for a go to push to `portable`.
-   Revoke the sandbox token that was pasted into the session and make a new one.
-2. More golden paths on demand (the manifest makes adding one a folder + a golden.toml).
+The 2026-10-09 audit (`docs/audits/2026-10-09-ultracode.md`, 178 findings) sets the order now: see
+[HARDENING.md](HARDENING.md). The critical one, re-checked on `main`: a sandboxed agent can write `.git` hooks or
+config, and host-side git runs them next to the signing secret (Claudo has the same pattern). Until H1 is done,
+the sandbox does NOT contain a hostile agent; it only keeps the secret out of a cooperative agent's process.
+1. **H1** trust boundary (`.git` read-only in both sandboxes, hardened host git, gate commands from IT's golden
+   path only), then H2 containment record, H3 escaping, H4 state machine. All offline and free.
+2. Antoine: decide the live item `utc-clock` (scratch live8, at IT's ship review, reviewer BLOCK made stale by the
+   targeted fix, `fixed_after_review` needs a note). Revoke the sandbox token pasted into the session.
+   Claudo ca576da was pushed to `portable` (CI green).
+3. H5-H7, then more golden paths on demand.

@@ -2,7 +2,7 @@
 
 Governed idea-to-app pipeline (spec, design from the tech radar, plan, build through Claudo, gates, human checkpoints).
 Read `PROGRESS.md` first: it holds the last verified state and the next step. The correction plan from the
-2026-10-08 review is `CORRECTIONS.md`.
+2026-10-08 review is `CORRECTIONS.md`; the work order from the 2026-10-09 audit is `HARDENING.md`.
 
 ## Verification
 
