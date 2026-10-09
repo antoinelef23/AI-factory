@@ -99,23 +99,50 @@ def _backstage_rows(data: dict) -> list[dict[str, str]]:
         timeline = [t for t in entry.get("timeline") or [] if isinstance(t, dict)]
         dated = [t for t in timeline if t.get("date")]
         current = max(dated, key=lambda t: str(t["date"])) if dated else (timeline[0] if timeline else {})
-        ring_id = str(current.get("ringId", entry.get("ring", ""))).strip()
+        ring_id = _cell(current.get("ringId", entry.get("ring", "")))
         ring = ring_id if ring_id.lower() in RING_ALIASES else rings.get(ring_id, ring_id)
-        quadrant_id = str(entry.get("quadrant", "")).strip()
-        name = str(entry.get("title") or entry.get("id") or "").strip()
-        key = str(entry.get("key") or entry.get("id") or "").strip()
+        quadrant_id = _cell(entry.get("quadrant", ""))
+        name = _cell(entry.get("title") or entry.get("id") or "")
+        key = _cell(entry.get("key") or entry.get("id") or "")
         rows.append(
             {
                 "name": name,
                 "ring": ring,
                 "quadrant": quadrants.get(quadrant_id, quadrant_id),
                 # optional fields a company may add to its entries; standard Backstage has none of them
-                "category": str(entry.get("category", "")).strip(),
-                "replaced_by": str(entry.get("replacedBy") or entry.get("replaced_by") or "").strip(),
+                "category": _cell(entry.get("category", "")),
+                "replaced_by": _cell(entry.get("replacedBy") or entry.get("replaced_by") or ""),
                 "match": key if key and key.lower() != name.lower() else "",
             }
         )
     return rows
+
+
+def _cell(value: object) -> str:
+    """A JSON value as the importer's text: null is empty, a list is `a;b` (never 'None' or "['a']": A59)."""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ";".join(_cell(v) for v in value if v is not None)
+    return str(value).strip()
+
+
+def tech_slug(name: str) -> str:
+    """A radar id for a technology name: C, C++ and C# must not all become 'c'."""
+    return slugify(name.replace("++", "pp").replace("#", "sharp").replace("+", "plus"))
+
+
+# An alias that is also an everyday word (or too short to be one) matches design prose by accident: "Go" on
+# hold once blocked "let users go to...". Such aliases only count in code-like contexts (A60, A83).
+COMMON_WORDS = {
+    "go", "rust", "swift", "dart", "spring", "express", "rails", "requests", "motor", "click", "black",
+    "next", "remix", "ember", "backbone", "spark", "hive", "storm", "puppet", "chef", "salt", "vault",
+    "consul", "nomad",
+}  # fmt: skip
+
+
+def _needs_strict(aliases: list[str]) -> bool:
+    return any(len(a) <= 3 or a in COMMON_WORDS for a in aliases)
 
 
 def _rows(text: str, source: str) -> tuple[list[dict[str, str]], list[str]]:
@@ -126,7 +153,7 @@ def _rows(text: str, source: str) -> tuple[list[dict[str, str]], list[str]]:
             return _backstage_rows(data), []
         if isinstance(data, dict):
             data = data.get("blips") or data.get("technologies") or data.get("tech") or []
-        return [{str(k).strip().lower(): str(v).strip() for k, v in row.items()} for row in data], []
+        return [{str(k).strip().lower(): _cell(v) for k, v in row.items()} for row in data], []
     reader = csv.DictReader(io.StringIO(text), delimiter=_sniff(text))
     rows = [{(k or "").strip().lower(): (v or "").strip() for k, v in row.items()} for row in reader]
     return rows, []
@@ -164,6 +191,8 @@ def _render(entry: dict) -> str:
         lines.append(f"replaced_by = {_toml_str(entry['replaced_by'])}")
     if entry["golden_path"]:
         lines.append(f"golden_path = {_toml_str(entry['golden_path'])}")
+    if _needs_strict(entry["match"]):
+        lines.append("text_strict = true")
     return "\n".join(lines)
 
 
@@ -204,7 +233,7 @@ def import_radar(
                 f"expected one of {sorted(set(RING_ALIASES))}"
             )
             continue
-        tech_id = slugify(raw["name"])
+        tech_id = tech_slug(raw["name"])
         if tech_id in seen:
             result.problems.append(
                 f"line {line_no}: {raw['name']!r} duplicates {seen[tech_id]!r} (id {tech_id!r})"
@@ -223,7 +252,7 @@ def import_radar(
                 "category": category,
                 "ring": ring,
                 "match": list(dict.fromkeys(aliases)),  # unique, order kept
-                "replaced_by": slugify(raw["replaced_by"]) if raw["replaced_by"] else "",
+                "replaced_by": tech_slug(raw["replaced_by"]) if raw["replaced_by"] else "",
                 "golden_path": raw["golden_path"],
             }
         )

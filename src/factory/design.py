@@ -17,7 +17,8 @@ BASE_CAPABILITIES = ["language", "backend", "testing", "quality", "ci", "hosting
 CAPABILITY_KEYWORDS = {
     "frontend": r"\b(ui|interface|dashboard|pages?|forms?|front[- ]?end|web app|screens?|portal)\b",
     "database": r"\b(stor(e|es|ed)|sav(e|es|ed)|persist\w*|database|history|records?|track\w*)\b",
-    "ai": r"\b(ai|llm|gpt|claude|summari[sz]\w*|classif\w*|chatbot|assistant|generat\w*)\b",
+    # "AI" only in capitals: a lowercase "ai" is French ("j'ai") far more often than a capability.
+    "ai": r"(?-i:(?<!')\bAI\b)|\b(llm|gpt|claude|summari[sz]\w*|classif\w*|chatbot|assistant|generat\w*)\b",
     "messaging": r"\b(event|events|queue|stream|streaming|kafka|pub/?sub)\b",
 }
 
@@ -75,10 +76,18 @@ def grounded_capabilities(answer: str, idea: str, offered: list[str]) -> tuple[l
     return accepted, problems
 
 
+# A clause that says what the app must NOT have: "no UI", "nothing stored", "without a database".
+_NEGATION = re.compile(r"\b(no|not|without|never|nothing|none|sans|pas|aucun\w*)\b|n't\b", re.I)
+_CLAUSE = re.compile(r"[.,;:!?\n()]|\bbut\b|\bmais\b", re.I)
+
+
 def detect_capabilities(idea: str) -> list[str]:
+    """Base capabilities plus the optional ones the idea's words ask for. A negated clause asks for nothing:
+    "API only, no UI, nothing stored" is not a frontend with a database (audit A18)."""
+    clauses = [c for c in _CLAUSE.split(idea) if c and not _NEGATION.search(c)]
     caps = list(BASE_CAPABILITIES)
     for cap, pattern in CAPABILITY_KEYWORDS.items():
-        if re.search(pattern, idea, re.I):
+        if any(re.search(pattern, clause, re.I) for clause in clauses):
             caps.append(cap)
     return caps
 

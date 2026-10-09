@@ -258,9 +258,15 @@ def cmd_radar_import(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve() if args.root else find_root()
     source = Path(args.source)
     out = Path(args.out) if args.out else root / "radar.imported.toml"
-    result = import_radar(
-        source.read_text(encoding="utf-8"), source=source.name, company=args.company, version=args.version
-    )
+    try:
+        data = source.read_bytes()
+    except OSError as e:
+        raise FactoryError(f"cannot read {source}: {e.strerror or e}") from e
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = data.decode("cp1252", errors="replace")  # a French Excel export
+    result = import_radar(text, source=source.name, company=args.company, version=args.version)
     for problem in result.problems:
         print(f"error: {problem}", file=sys.stderr)
     if not result.ok:
@@ -343,7 +349,12 @@ def cmd_check(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve() if args.root else find_root()
     radar = load_radar(load_config(root).radar_path)
     target = Path(args.path).resolve()
+    if not target.is_dir():  # a CI typo must not turn the radar gate green on code it never scanned
+        raise FactoryError(f"{target} is not a directory: nothing was checked")
     docs = [target / d for d in args.doc] if args.doc else []
+    missing = [d for d in docs if not d.is_file()]
+    if missing:
+        raise FactoryError(f"--doc not found: {', '.join(str(d) for d in missing)}")
     report = check_project(target, radar, args.maturity, docs=docs)
     exceptions = set(filter(None, (args.allow or "").split(",")))
     blocking = report.blocking(exceptions)
