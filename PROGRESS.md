@@ -279,8 +279,10 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   already have the recipe. Same class as J-5, not fixed: it would need a deliberate setup commit on the base.
 
 ## Next steps (in order)
-1. Antoine: a go to push (Claudo `c843e37`..`5ccdfd1` to `portable` first, then the factory). CI will run
-   the new golden-paths job (docker builds) for the first time on GitHub.
+1. Pushed 2026-10-09 on Antoine's go: Claudo `5ccdfd1` to `portable` (gate green) and the factory (CI green at `263ebce`). The first
+   factory CI run was red on coverage only (99.9%): CI has no Claudo checkout and runs on Linux, so the tests
+   reaching two `claudo.py` lines were skipped there; `263ebce` covers them platform-independently. The new
+   golden-paths job (docker builds of the three templates) passed on GitHub the first time.
 2. Antoine, billed (ask first): one sandboxed MVP smoke on the hardened code (about $2, as utc-clock was), and
    `just calibrate` again: the calibration baseline was corrected (A73), so the recorded numbers are stale.
 3. Antoine: decide the live item `utc-clock` (scratch live8, at IT's ship review); revoke the token pasted into
