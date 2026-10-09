@@ -51,6 +51,9 @@ class Sandbox:
     pids: int = 1024
     timeout: int = 1800
     docker: Docker = docker_cli
+    # From a Windows host the bind mount shows every file as 0777 (chmod is a no-op): checks then run through
+    # the image's `lab-ws`, on a copy carrying git's file modes (else ruff's EXE rules flag every file).
+    git_modes: bool = os.name == "nt"
 
     # ------------------------------------------------------------------ readiness
     def problems(self, *, need_credential: bool = True) -> list[str]:
@@ -126,7 +129,8 @@ class Sandbox:
     def executor(self, command: str, cwd: Path) -> tuple[int, str]:
         """A gate command (`uv run pytest`, `npm ci`...) in the container. The environment goes to
         /workspace/.venv so the dependencies gate can read the installed licences afterwards."""
-        argv = self.argv(cwd, ["sh", "-c", command], {"UV_PROJECT_ENVIRONMENT": "/workspace/.venv"})
+        shell = ["lab-ws", "sh", "-c", command] if self.git_modes else ["sh", "-c", command]
+        argv = self.argv(cwd, shell, {"UV_PROJECT_ENVIRONMENT": "/workspace/.venv"})
         try:
             p = subprocess.run(
                 argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=self.timeout

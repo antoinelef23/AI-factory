@@ -81,7 +81,7 @@ def test_the_gate_executor_runs_the_command_in_the_container(monkeypatch, tmp_pa
         return SimpleNamespace(returncode=3, stdout="out", stderr="err")
 
     monkeypatch.setattr(sb.subprocess, "run", fake_run)
-    assert Sandbox().executor("uv run --quiet pytest -q", tmp_path) == (3, "outerr")
+    assert Sandbox(git_modes=False).executor("uv run --quiet pytest -q", tmp_path) == (3, "outerr")
     assert seen["argv"][-3:] == ["sh", "-c", "uv run --quiet pytest -q"]
     assert "UV_PROJECT_ENVIRONMENT=/workspace/.venv" in seen["argv"]  # the licence check reads it afterwards
 
@@ -150,3 +150,15 @@ def test_unsafe_host_is_recorded_for_it_to_acknowledge(foreman, fake_runner):
     assert foreman._containment(item) == "" and item.build_where == "host"
     foreman._do_build(item)
     assert any(a["kind"] == "unsafe_host" for a in item.ship_acks)
+
+
+def test_from_a_windows_host_gates_run_with_gits_file_modes(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sb.subprocess, "run", fake_run)
+    Sandbox(git_modes=True).executor("uv run --quiet ruff check .", tmp_path)
+    assert seen["argv"][-4:] == ["lab-ws", "sh", "-c", "uv run --quiet ruff check ."]
