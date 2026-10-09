@@ -18,7 +18,7 @@ from factory.guard import check_project
 from factory.identity import GhIdentity, IdentityError, load_roles
 from factory.importer import import_radar
 from factory.project import ProjectError, current_branch
-from factory.radar import MATURITIES, POLICY, RINGS, RadarError, load_radar
+from factory.radar import MATURITIES, POLICY, RINGS, RadarError, load_radar, normalize
 from factory.sandbox import Sandbox
 from factory.workitem import ROLES, ItemNotFound, Store, WorkItem
 
@@ -356,7 +356,11 @@ def cmd_check(args: argparse.Namespace) -> int:
     if missing:
         raise FactoryError(f"--doc not found: {', '.join(str(d) for d in missing)}")
     report = check_project(target, radar, args.maturity, docs=docs)
-    exceptions = set(filter(None, (args.allow or "").split(",")))
+    exceptions = {
+        (radar.find(a).id if radar.find(a) else normalize(a))
+        for a in (args.allow or "").split(",")
+        if a.strip()
+    }
     blocking = report.blocking(exceptions)
     print(f"radar check of {target} at maturity {args.maturity} ({radar.company} {radar.version})")
     print(f"  allowed: {', '.join(report.allowed) or '-'}")

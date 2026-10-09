@@ -73,7 +73,7 @@ from factory.project import (
     rev_parse,
     sync_merged_base,
 )
-from factory.radar import BLOCK, MATURITIES, Radar, verdict
+from factory.radar import BLOCK, MATURITIES, Radar, normalize, verdict
 from factory.sandbox import Sandbox, SandboxedRunner
 from factory.speclint import lint_spec
 from factory.templates import (
@@ -623,11 +623,12 @@ class Foreman:
         by, _ = self._actor(role, by)
         if expires is not None and expires < self.today():
             raise FactoryError(f"an exception cannot expire in the past ({expires.isoformat()})")
-        known = self.radar.get(tech) or self.radar.find(tech)
-        key = known.id if known else tech
-        if known and known.ring == "hold":
+        known = self.radar.get(tech.strip()) or self.radar.find(tech)
+        key = known.id if known else normalize(tech)  # the key the radar gate reports (A88, A122)
+        if known and verdict(known, item.maturity) == BLOCK:  # an exception never lifts a block (A121, A123)
+            why = "on hold" if known.ring == "hold" else f"{known.ring}, so blocked at {item.maturity}"
             raise FactoryError(
-                f"{known.name} is on hold: change the radar (radar.toml) instead of an exception"
+                f"{known.name} is {why}: no exception lifts that; change the radar (radar.toml) instead"
             )
         if key not in item.it_exceptions:
             item.it_exceptions.append(key)

@@ -53,12 +53,20 @@ class Tech:
     # The name is also an ordinary word ("requests"): in free text it counts only in a code-like context.
     text_strict: bool = False
     version: str = ""  # versions IT accepts, PEP 440 style (">=0.115, <1"); checked against uv.lock
+    # Only THESE aliases need a code-like context (`text_strict = ["motor"]`): "MongoDB" in prose still
+    # counts, "motor insurance" does not (audit A83).
+    strict_aliases: tuple[str, ...] = ()
+
+
+def _alias_regex(alias: str) -> str:
+    """An alias as a regex: `langchain-*` names a family (langchain-community, langchain-openai...)."""
+    return re.escape(alias[:-1]) + r"[\w.-]+" if alias.endswith("*") else re.escape(alias)
 
 
 def _strict_pattern(aliases: tuple[str, ...]) -> re.Pattern[str]:
     """Code-like mentions of an ambiguous name: `requests`, import requests, requests.get(, pip install
     requests, requests>=2, "the Requests library". Never the bare English word ("100 requests")."""
-    a = "(?:" + "|".join(re.escape(x) for x in aliases) + ")"
+    a = "(?:" + "|".join(_alias_regex(x) for x in aliases) + ")"
     return re.compile(
         rf"`{a}`|\b(?:import|from)\s+{a}\b|\b{a}\.[A-Za-z_]\w*\s*\(|\b(?:pip|uv)\s+(?:install|add)\s+(?:\S+\s+)*?{a}\b"
         rf"|\b{a}\s*[=<>~!]=|\bthe\s+{a}\s+(?:library|package|module|client)\b",
@@ -76,32 +84,39 @@ class Radar:
     def __post_init__(self) -> None:
         self._by_id = {t.id: t for t in self.techs}
         self._by_name: dict[str, Tech] = {}
+        self._families: list[tuple[str, Tech]] = []  # (normalized prefix, tech) of `name-*` aliases
         for t in self.techs:
             for alias in (t.id, *t.match):
-                self._by_name.setdefault(normalize(alias), t)
-        self._text_patterns = [
-            (
-                t,
-                _strict_pattern(t.match)
-                if t.text_strict
-                else re.compile(
-                    r"(?<![\w-])(?:" + "|".join(re.escape(a) for a in t.match) + r")(?![\w-])", re.I
-                ),
-            )
-            for t in self.techs
-            if t.match
-        ]
+                if alias.endswith("*"):
+                    self._families.append((normalize(alias[:-1]), t))
+                else:
+                    self._by_name.setdefault(normalize(alias), t)
+        self._text_patterns: list[tuple[Tech, list[re.Pattern[str]]]] = []
+        for t in self.techs:
+            strict = t.match if t.text_strict else tuple(a for a in t.match if a in t.strict_aliases)
+            loose = tuple(a for a in t.match if a not in strict)
+            patterns = [_strict_pattern(strict)] if strict else []
+            if loose:
+                alternatives = "|".join(_alias_regex(a) for a in loose)
+                patterns.append(re.compile(rf"(?<![\w-])(?:{alternatives})(?![\w-])", re.I))
+            if patterns:
+                self._text_patterns.append((t, patterns))
 
     def get(self, tech_id: str) -> Tech | None:
         return self._by_id.get(tech_id)
 
     def find(self, name: str) -> Tech | None:
-        """Exact (normalized) lookup of a package / module / image / alias name."""
-        return self._by_name.get(normalize(name))
+        """Exact (normalized) lookup of a package / module / image / alias name, then the `name-*` families
+        (langchain-community is LangChain: audit A82)."""
+        key = normalize(name)
+        exact = self._by_name.get(key)
+        if exact is not None:
+            return exact
+        return next((t for prefix, t in self._families if key.startswith(prefix) and key != prefix), None)
 
     def scan_text(self, text: str) -> list[Tech]:
         """Technologies mentioned in free text (design docs, business ideas)."""
-        return [t for t, pat in self._text_patterns if pat.search(text)]
+        return [t for t, patterns in self._text_patterns if any(p.search(text) for p in patterns)]
 
     def by_category(self, category: str) -> list[Tech]:
         return [t for t in self.techs if t.category == category]
@@ -126,6 +141,7 @@ def load_radar(path: Path) -> Radar:
     errors: list[str] = []
     techs: list[Tech] = []
     seen: set[str] = set()
+    owner: dict[str, str] = {}  # normalized alias -> tech id: one alias, one technology (audit A157)
     for i, raw in enumerate(data.get("tech", []), start=1):
         where = f"tech #{i} ({raw.get('id', '?')})"
         missing = [k for k in ("id", "name", "category", "ring") if not raw.get(k)]
@@ -137,19 +153,29 @@ def load_radar(path: Path) -> Radar:
         if raw["id"] in seen:
             errors.append(f"{where}: duplicate id")
         seen.add(raw["id"])
+        match = tuple(str(m).lower() for m in raw.get("match", []))
+        for alias in {normalize(a) for a in (raw["id"], *match)}:
+            if owner.setdefault(alias, raw["id"]) != raw["id"]:
+                errors.append(f"{where}: alias {alias!r} already names {owner[alias]}")
+        strict = raw.get("text_strict", False)
+        if isinstance(strict, list):
+            unknown = [a for a in strict if str(a).lower() not in match]
+            if unknown:
+                errors.append(f"{where}: text_strict names {unknown}, which are not in its match list")
         techs.append(
             Tech(
                 id=raw["id"],
                 name=raw["name"],
                 category=raw["category"],
                 ring=raw["ring"],
-                match=tuple(str(m).lower() for m in raw.get("match", [])),
+                match=match,
                 golden_path=raw.get("golden_path"),
                 replaced_by=raw.get("replaced_by"),
                 preferred=bool(raw.get("preferred", False)),
                 note=raw.get("note", ""),
-                text_strict=bool(raw.get("text_strict", False)),
+                text_strict=strict is True,
                 version=str(raw.get("version", "")).strip(),
+                strict_aliases=tuple(str(a).lower() for a in strict) if isinstance(strict, list) else (),
             )
         )
     from factory.policy import PolicyError, parse_spec

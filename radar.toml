@@ -80,7 +80,7 @@ id = "angularjs"
 name = "AngularJS (1.x)"
 category = "frontend"
 ring = "hold"
-match = ["angularjs", "angular.js"]
+match = ["angularjs", "angular.js", "angular"]  # npm `angular` is AngularJS 1.x (Angular 2+ is @angular/*)
 replaced_by = "react"
 
 [[tech]]
@@ -134,6 +134,7 @@ name = "MongoDB"
 category = "database"
 ring = "hold"
 match = ["mongodb", "mongo", "pymongo", "motor"]
+text_strict = ["motor"]  # "motor insurance" is not MongoDB; `motor` in code is
 replaced_by = "postgresql"
 
 # ---------------------------------------------------------------- libraries
@@ -221,7 +222,7 @@ id = "langchain"
 name = "LangChain"
 category = "ai"
 ring = "assess"
-match = ["langchain", "langchain-core", "langgraph"]
+match = ["langchain", "langchain-*", "langgraph"]  # the whole langchain-* family of packages
 
 # ---------------------------------------------------------------- messaging
 [[tech]]

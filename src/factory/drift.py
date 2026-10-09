@@ -60,10 +60,24 @@ def radar_diff(old: Radar, new: Radar) -> RadarDiff:
             )
         if before.category != tech.category:
             diff.other_changes.append(f"{tech.id}: category {before.category} -> {tech.category}")
+        if before.version != tech.version:  # a stricter constraint makes locked versions non-compliant
+            diff.other_changes.append(f"{tech.id}: version {before.version or '-'} -> {tech.version or '-'}")
+        if set(before.match) != set(tech.match):
+            gained, lost = (
+                sorted(set(tech.match) - set(before.match)),
+                sorted(set(before.match) - set(tech.match)),
+            )
+            diff.other_changes.append(
+                f"{tech.id}: aliases" + (f" +{gained}" if gained else "") + (f" -{lost}" if lost else "")
+            )
         for maturity in MATURITIES:
             was, now = verdict(before, maturity), verdict(tech, maturity)
             if SEVERITY[now] > SEVERITY[was]:
                 diff.impacts.append(Impact(tech, maturity, was, now))
+    if set(old.forbidden_licenses) != set(new.forbidden_licenses):
+        diff.other_changes.append(
+            f"forbidden licences: {sorted(old.forbidden_licenses)} -> {sorted(new.forbidden_licenses)}"
+        )
     # A removed technology becomes "not on the radar": stricter in prod (block) and at the others (approval).
     for tech in diff.removed:
         for maturity in MATURITIES:
@@ -118,7 +132,11 @@ def scan_drift(
         if item.slug in in_flight:
             continue  # the folder shows the change branch, not the delivered state: not judged until merged
         app = apps_dir / item.slug
-        if not app.is_dir():
+        if not app.is_dir():  # moved or deleted: nothing proves it still complies
+            missing = Violation(
+                f"unverifiable:{item.slug}", item.slug, None, BLOCK, (str(app),), "the app folder is missing"
+            )
+            drifted.append(Drift(item, [missing]))
             continue
         # What the app USES (manifests, imports, images), never its old design prose: design.md records what
         # was approved at the time, so after a migration it would still name the removed technology.
