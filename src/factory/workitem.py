@@ -7,6 +7,7 @@ tasks.md, gate-report.md), so the repo is the memory, as in Claudo.
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
@@ -78,6 +79,7 @@ class WorkItem:
     capabilities: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     feedback: str = ""  # last rejection reason / failed gate report, fed to the next attempt
+    rejection: str = ""  # the human's last rejection reason, kept until that checkpoint is approved (A29)
     it_exceptions: list[str] = field(default_factory=list)  # radar keys IT explicitly approved
     # key -> {"expires": "YYYY-MM-DD" or "", "reason": str, "by": str}: why, who, and until when
     exception_terms: dict = field(default_factory=dict)
@@ -147,6 +149,10 @@ class WorkItem:
         return cls(**known)
 
 
+class ItemNotFound(KeyError):
+    """No such work item (a KeyError for the callers that already expect one; the CLI catches only this)."""
+
+
 class Store:
     def __init__(self, work_dir: Path) -> None:
         self.work_dir = work_dir
@@ -165,22 +171,35 @@ class Store:
         return slug
 
     def save(self, item: WorkItem) -> None:
+        """Atomic: a crash mid-write leaves the previous item.json, never half of one."""
         d = self.dir(item.slug)
         d.mkdir(parents=True, exist_ok=True)
-        (d / "item.json").write_text(
+        tmp = d / "item.json.tmp"
+        tmp.write_text(
             json.dumps(item.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n"
         )
+        os.replace(tmp, d / "item.json")
 
     def load(self, slug: str) -> WorkItem:
         path = self.dir(slug) / "item.json"
         if not path.is_file():
-            raise KeyError(f"no work item '{slug}' in {self.work_dir}")
-        return WorkItem.from_dict(json.loads(path.read_text(encoding="utf-8")))
+            raise ItemNotFound(f"no work item '{slug}' in {self.work_dir}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"{path} does not hold a work item")
+        return WorkItem.from_dict(data)
 
     def all(self) -> list[WorkItem]:
+        """Every readable item. One corrupt item.json is reported in `unreadable`, not fatal to the others."""
+        self.unreadable: list[str] = []
         if not self.work_dir.is_dir():
             return []
-        items = [self.load(p.parent.name) for p in sorted(self.work_dir.glob("*/item.json"))]
+        items = []
+        for p in sorted(self.work_dir.glob("*/item.json")):
+            try:
+                items.append(self.load(p.parent.name))
+            except (ValueError, TypeError) as e:  # JSONDecodeError is a ValueError
+                self.unreadable.append(f"{p.parent.name}: {e}")
         return sorted(items, key=lambda i: i.created)
 
     def write(self, item: WorkItem, name: str, content: str) -> Path:

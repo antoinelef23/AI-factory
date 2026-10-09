@@ -19,7 +19,7 @@ from factory.identity import GhIdentity, IdentityError, load_roles
 from factory.importer import import_radar
 from factory.radar import MATURITIES, POLICY, RINGS, RadarError, load_radar
 from factory.sandbox import Sandbox
-from factory.workitem import ROLES, Store, WorkItem
+from factory.workitem import ROLES, ItemNotFound, Store, WorkItem
 
 
 def _foreman(args: argparse.Namespace, runner_name: str | None = None) -> Foreman:
@@ -240,6 +240,8 @@ def cmd_show(args: argparse.Namespace) -> int:
 def cmd_board(args: argparse.Namespace) -> int:
     f = _foreman(args, "offline")
     items = f.store.all()
+    for problem in f.store.unreadable:
+        print(f"UNREADABLE {problem}", file=sys.stderr)
     if not items:
         print('No work items yet. Start with: factory intake "Title" --idea "..." --maturity poc')
         return 0
@@ -556,8 +558,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, RadarError, FactoryError, AgentError, EngineError, IdentityError, KeyError) as e:
-        msg = e.args[0] if isinstance(e, KeyError) and e.args else e
+    except (ConfigError, RadarError, FactoryError, AgentError, EngineError, IdentityError, ItemNotFound) as e:
+        msg = e.args[0] if isinstance(e, ItemNotFound) and e.args else e
         print(f"error: {msg}", file=sys.stderr)
         return 2
 

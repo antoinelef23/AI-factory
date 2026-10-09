@@ -268,8 +268,18 @@ Run: auto
 
 def porcelain(app: Path) -> list[str]:
     """Paths with uncommitted changes (tracked or untracked, .gitignore honored); [] when clean."""
-    out = _git_raw(app, "status", "--porcelain", "-uall")  # "XY path": never strip before slicing
-    return [line[3:].strip().strip('"') for line in out.splitlines() if line.strip()]
+    # -z: paths verbatim (no C-quoting of non-ASCII names) and a rename as "XY new\0old\0" (audit A62).
+    fields = _git_raw(app, "status", "--porcelain=v1", "-z", "-uall").split("\0")
+    paths, i = [], 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if entry[0] in "RC":
+            i += 1  # the original path of a rename or copy
+    return paths
 
 
 def commit_all(app: Path, message: str) -> list[str]:

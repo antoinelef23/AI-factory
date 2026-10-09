@@ -11,6 +11,7 @@ import hashlib
 import re
 import secrets
 import shutil
+import subprocess
 from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
@@ -93,6 +94,17 @@ from factory.templates import (
 )
 from factory.workitem import ROLES, STEP_BY_NAME, STEPS, Store, WorkItem
 
+# Environment problems a step can hit (an engine or git timeout, a broken manifest, the host down): reported
+# as a FactoryError once the item is saved, blocked, with its approvals, history and billed cost (A30, A36).
+ENVIRONMENT_ERRORS = (
+    EngineError,
+    ProjectError,
+    DeliveryError,
+    subprocess.TimeoutExpired,
+    OSError,
+    ValueError,
+)
+
 APP_BUILD_COMMIT = """feat({slug}): the app built by the build agent
 
 Why: a single build agent does not commit; the factory records its work as one commit so that the gates,
@@ -163,7 +175,9 @@ class Foreman:
         self.sandbox, self.unsafe_host = sandbox, unsafe_host
 
     # ------------------------------------------------------------------ intake
-    def intake(self, title: str, idea: str, maturity: str = "poc", requester: str = "business") -> WorkItem:
+    def intake(
+        self, title: str, idea: str, maturity: str = "poc", requester: str = "business", issue_url: str = ""
+    ) -> WorkItem:
         if maturity not in MATURITIES:
             raise FactoryError(f"maturity must be one of {MATURITIES}")
         if not title.strip() or not idea.strip():
@@ -174,8 +188,9 @@ class Foreman:
             idea=idea.strip(),
             maturity=maturity,
             requester=requester,
+            issue_url=issue_url,
         )
-        item.log("intake", f"submitted by {requester}")
+        item.log("intake", f"from GitHub issue {issue_url}" if issue_url else f"submitted by {requester}")
         self.store.save(item)
         self.store.write(item, "idea.md", idea_md(item))
         return item
@@ -206,12 +221,11 @@ class Foreman:
                 issue["body"].strip() or issue["title"],
                 self._issue_maturity(issue),
                 requester=issue["author"] or "business",
+                issue_url=issue["url"],  # in the FIRST save: a crash after it never re-imports the issue
             )
-            item.issue_url = issue["url"]
-            item.log("intake", f"from GitHub issue {issue['url']}")
-            self.store.save(item)
             new.append(item)
         self.report_issues()
+        skipped += self.issue_errors
         return [self.store.load(i.slug) for i in new], skipped  # as reported (issue_reported updated)
 
     def _issue_refusal(self, issue: dict) -> str:
@@ -232,7 +246,7 @@ class Foreman:
     def report_issues(self) -> int:
         """Comment on each imported item's issue when its stage or status changed since the last comment."""
         host = self._host()
-        posted = 0
+        posted, self.issue_errors = 0, []
         for item in self.store.all():
             if not item.issue_url:
                 continue
@@ -241,8 +255,9 @@ class Foreman:
                 continue
             try:
                 host.comment_issue(item.issue_url, self._issue_comment(item))
-            except DeliveryError as e:
-                raise FactoryError(str(e)) from e
+            except DeliveryError as e:  # a deleted issue: report it, keep reporting the others
+                self.issue_errors.append(f"{item.slug}: could not comment on {item.issue_url}: {e}")
+                continue
             item.issue_reported = state
             item.log("issue_comment", f"reported {state} on {item.issue_url}")
             self.store.save(item)
@@ -325,8 +340,24 @@ class Foreman:
             raise FactoryError(f"'{item.slug}' was abandoned: open a new change instead of reviving it")
 
     def run(self, item: WorkItem, max_steps: int = 20) -> WorkItem:
-        """Run automatic stages until a checkpoint, a failure, or shipped."""
+        """Run automatic stages until a checkpoint, a failure, or shipped. Whatever goes wrong inside a step,
+        the item is saved first (blocked, with what happened): nothing done or paid for is lost."""
         self._refuse_abandoned(item)
+        try:
+            return self._run_steps(item, max_steps)
+        except Exception as e:
+            self._persist_failure(item, e)
+            if isinstance(e, FactoryError) or not isinstance(e, ENVIRONMENT_ERRORS):
+                raise  # a policy refusal as is; a bug keeps its traceback
+            raise FactoryError(f"{item.slug} blocked: {type(e).__name__}: {e}") from e
+
+    def _persist_failure(self, item: WorkItem, error: Exception) -> None:
+        detail = f"{type(error).__name__}: {error}"
+        item.status, item.feedback = "blocked", detail[:3000]
+        item.log("failed", detail[:600])
+        self.store.save(item)
+
+    def _run_steps(self, item: WorkItem, max_steps: int) -> WorkItem:
         if item.step.kind == "terminal":  # shipped stays shipped, whatever happened to its app since (A113)
             item.status = "shipped"
             self.store.save(item)
@@ -369,7 +400,9 @@ class Foreman:
             handler = getattr(self, f"_do_{step.name}")
             ok, detail = handler(item)
             item.log("done" if ok else "failed", detail[:600])
-            if not ok:
+            if ok:
+                item.feedback = ""  # that failure is resolved: never fed to a later stage as if current
+            else:
                 item.feedback = detail
                 # Only an agent can act on the gate report; offline, a retry would fail identically.
                 if (
@@ -483,7 +516,10 @@ class Foreman:
         if item.stage == "ship_review":
             self._check_gated_head(item)
         if item.stage == "ship_review" and item.claudo_cp and not item.claudo_cp_consumed:
-            outcome, detail = self._finalize_with_claudo(item, by or role)
+            try:
+                outcome, detail = self._finalize_with_claudo(item, by or role)
+            except ENVIRONMENT_ERRORS as e:  # saved below as blocked, with the final run's cost (A30)
+                outcome, detail = "blocked", f"{type(e).__name__}: {e}"
             if outcome == "blocked":  # signing, the final run, or what it changed failed: nothing ships
                 item.log("failed", detail[:600])
                 item.feedback, item.status = detail, "blocked"
@@ -501,7 +537,7 @@ class Foreman:
             {"stage": item.stage, "role": role, "by": by or role, "note": note, "verified": verified}
         )
         item.log("approved", f"{role} {by}".strip() + (f": {note}" if note else ""))
-        item.feedback = ""
+        item.feedback = item.rejection = ""
         self._advance(item)
         return self.run(item)
 
@@ -546,7 +582,7 @@ class Foreman:
         if item.stage == "ship_review" and item.claudo_cp:  # Claudo reopens the checkpoint's tasks
             item.claudo_rejection = {"cp": item.claudo_cp, "reason": reason, "by": by or role}
         item.log("rejected", f"{role} {by}".strip() + f": {reason}")
-        item.feedback = reason
+        item.feedback = item.rejection = reason
         item.stage = back
         item.status = "active"
         self.store.save(item)
@@ -682,7 +718,8 @@ class Foreman:
     def _do_spec(self, item: WorkItem) -> tuple[bool, str]:
         """Write spec.md. It must pass the structural lint before a human sees it: an agent spec that fails is
         re-prompted with the errors (spec_lint_retries), then blocked."""
-        feedback, tries = item.feedback, 0
+        base_feedback = self._prompt_feedback(item)
+        feedback, tries = base_feedback, 0
         while True:
             if item.kind != "app":
                 existing = self._read_app_file(item, f"work/{item.target}/spec.md")
@@ -706,7 +743,7 @@ class Foreman:
             tries += 1
             item.log("lint", f"spec lint: {len(lint.errors)} error(s), re-prompting ({tries})")
             feedback = (
-                f"{item.feedback}\nYour previous spec.md FAILED the structural lint. Fix every error:\n"
+                f"{base_feedback}\nYour previous spec.md FAILED the structural lint. Fix every error:\n"
                 f"{lint.feedback()}\n\nYour previous spec.md was:\n{text}"
             )
         self.store.write(item, "spec.md", text)
@@ -805,7 +842,8 @@ class Foreman:
         """Write tasks.md. With Claudo available the plan must pass ITS plan-lint before a human sees
         it: an agent plan is re-prompted with the lint errors (plan_lint_retries), then blocked."""
         spec_ids = sorted(set(SPEC_ID.findall(self.store.read(item, "spec.md"))))
-        feedback, lint, tries = item.feedback, None, 0
+        base_feedback = self._prompt_feedback(item)
+        feedback, lint, tries, lint_clean = base_feedback, None, 0, ""
         while True:
             if self.runner is None:
                 text = (
@@ -828,8 +866,13 @@ class Foreman:
             scope = [w for w in lint.warnings if "files_touched does not list it" in w] if lint else []
             if lint is None or (lint.ok and not scope):
                 break
+            if lint.ok:
+                lint_clean = text
             if lint.ok and (self.runner is None or tries >= self.cfg.plan_lint_retries):
                 break  # only scope warnings left: the owner sees them at plan review, nothing blocks
+            if tries >= self.cfg.plan_lint_retries and lint_clean:
+                text, lint = lint_clean, self._lint(item, lint_clean)  # the scope check never blocks a plan
+                break
             if self.runner is None or tries >= self.cfg.plan_lint_retries:
                 self.store.write(item, "tasks.md", text)  # keep it for the human to inspect
                 where = "offline template" if self.runner is None else f"{tries + 1} attempt(s)"
@@ -841,7 +884,7 @@ class Foreman:
                 f"re-prompting ({tries})",
             )
             feedback = (
-                f"{item.feedback}\nYour previous tasks.md FAILED Claudo's plan-lint. Fix every error:\n"
+                f"{base_feedback}\nYour previous tasks.md FAILED Claudo's plan-lint. Fix every error:\n"
                 f"{lint.feedback()}\n\nYour previous tasks.md was:\n{text}"
             )
         self.store.write(item, "tasks.md", with_run_log(text))
@@ -1031,7 +1074,7 @@ class Foreman:
             return self._build_with_claudo(item, app, where)
         forbidden = [t.name for t in self.radar.techs if verdict(t, item.maturity) == BLOCK]
         result = self._builder(item).run(
-            change_build_prompt(item, forbidden, item.feedback),
+            change_build_prompt(item, forbidden, self._prompt_feedback(item)),
             cwd=app,
             model=self.cfg.models.get("build"),
             tools=BUILD_TOOLS,
@@ -1460,7 +1503,7 @@ class Foreman:
             return self._build_with_claudo(item, app, detail)
         forbidden = [t.name for t in self.radar.techs if verdict(t, item.maturity) == BLOCK]
         result = self._builder(item).run(
-            build_prompt(item, forbidden, item.feedback),
+            build_prompt(item, forbidden, self._prompt_feedback(item)),
             cwd=app,
             model=self.cfg.models.get("build"),
             tools=BUILD_TOOLS,
@@ -1481,6 +1524,15 @@ class Foreman:
         listed = ", ".join(fixed[:8]) + (f" (+{len(fixed) - 8} more)" if len(fixed) > 8 else "")
         self._add_ack(item, "fixed_after_review", f"{listed}: changed after Claudo's review")
         return True, f"{detail}; fixed by agent after Claudo's review (${result.cost_usd:.2f}): {listed}"
+
+    @staticmethod
+    def _prompt_feedback(item: WorkItem) -> str:
+        """What the next attempt is told: the human's rejection reason AND the last automatic failure, never
+        one overwriting the other (audit A29)."""
+        parts = [item.rejection] if item.rejection else []
+        if item.feedback and item.feedback != item.rejection:
+            parts.append(f"The last automatic check failed:\n{item.feedback}")
+        return "\n\n".join(parts)
 
     @staticmethod
     def _claudo_builds_next(item: WorkItem) -> bool:
