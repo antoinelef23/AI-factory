@@ -287,6 +287,7 @@ class Foreman:
         """A feature, bug fix or migration for an EXISTING shipped app, through the same governed pipeline."""
         if kind not in CHANGE_KINDS:
             raise FactoryError(f"a change is one of {CHANGE_KINDS}, not {kind!r}")
+        target = target.strip().replace("\\", "/").strip("/").rsplit("/", 1)[-1]  # './orders/' is 'orders'
         if not title.strip() or not idea.strip():
             raise FactoryError("a change needs a title and a description")
         app_item = self._shipped_target(target)
@@ -318,8 +319,18 @@ class Foreman:
         return item
 
     # ------------------------------------------------------------------ driving
+    @staticmethod
+    def _refuse_abandoned(item: WorkItem) -> None:
+        if item.status == "abandoned":
+            raise FactoryError(f"'{item.slug}' was abandoned: open a new change instead of reviving it")
+
     def run(self, item: WorkItem, max_steps: int = 20) -> WorkItem:
         """Run automatic stages until a checkpoint, a failure, or shipped."""
+        self._refuse_abandoned(item)
+        if item.step.kind == "terminal":  # shipped stays shipped, whatever happened to its app since (A113)
+            item.status = "shipped"
+            self.store.save(item)
+            return item
         if item.kind != "app":
             try:
                 self._shipped_target(item.target)
@@ -372,6 +383,12 @@ class Foreman:
                 item.status = "blocked"
                 break
             self._advance(item)
+        else:
+            item.status = "blocked"
+            item.feedback = (
+                f"stopped after {max_steps} automatic steps without reaching a checkpoint: run it again"
+            )
+            item.log("blocked", item.feedback)
         self.store.save(item)
         return item
 
@@ -428,6 +445,7 @@ class Foreman:
             raise FactoryError(f"stage '{item.stage}' must be decided by '{step.role}', not '{role}'")
 
     def approve(self, item: WorkItem, role: str, by: str = "", note: str = "") -> WorkItem:
+        self._refuse_abandoned(item)
         self._require_checkpoint(item, role)
         by, verified = self._actor(role, by)
         self._check_four_eyes(item, role, by)
@@ -519,6 +537,7 @@ class Foreman:
             item.approved_head = head_sha(app)
 
     def reject(self, item: WorkItem, role: str, reason: str, by: str = "") -> WorkItem:
+        self._refuse_abandoned(item)
         self._require_checkpoint(item, role)
         by, _ = self._actor(role, by)
         if not reason.strip():
@@ -553,6 +572,7 @@ class Foreman:
         reason: str = "",
     ) -> WorkItem:
         """IT grants a radar exception for this item (e.g. a trial tech at MVP), with its terms."""
+        self._refuse_abandoned(item)
         if role != "it":
             raise FactoryError("only IT can grant a tech radar exception")
         by, _ = self._actor(role, by)
@@ -583,9 +603,20 @@ class Foreman:
             raise FactoryError("only a shipped item can be promoted")
         if MATURITIES.index(to) <= MATURITIES.index(item.maturity):
             raise FactoryError(f"cannot promote from {item.maturity} to {to}")
+        open_change = next((i for i in self.store.all() if i.change_open and i.target == item.slug), None)
+        if open_change is not None:  # the rebuild would land on the change's branch
+            raise FactoryError(
+                f"'{item.slug}' has an open change ({open_change.slug}): merge or abandon it first"
+            )
         item.log("promoted", f"{item.maturity} -> {to} by IT {by}".strip())
         item.maturity = to
         item.it_exceptions, item.exception_terms = [], {}  # granted for the previous rung
+        # The previous rung's build state means nothing to the next one: Claudo starts its run afresh.
+        item.ship_acks, item.claudo_review, item.claudo_rejection = [], {}, {}
+        item.claudo_cp, item.claudo_cp_consumed, item.approval_nonce = "", False, ""
+        item.built_with_claudo = item.claudo_rework_pending = False
+        item.gated_sha = ""
+        (self.app_dir(item) / "work" / item.slug / ".runs" / "state.json").unlink(missing_ok=True)
         item.stage = "design"
         item.status = "active"
         return self.run(item)
@@ -1024,6 +1055,7 @@ class Foreman:
         """IT merges an approved change into the app's base branch (fast-forward only).
 
         This is the human's explicit act: the factory itself never merges. A new app has nothing to merge."""
+        self._refuse_abandoned(item)
         if role != "it":
             raise FactoryError("only IT merges: the factory never merges on its own")
         by, _ = self._actor(role, by)
@@ -1046,8 +1078,17 @@ class Foreman:
                 f"'{item.target}' is published at {published}: a local merge would diverge from it. "
                 f"Publish this change as a pull request (`factory publish {item.slug} --as it`) instead"
             )
+        app = self.app_dir(item)
+        branch = f"factory/{item.slug}"
         try:
-            tip = merge_fast_forward(self.app_dir(item), item.slug)
+            tip = rev_parse(app, f"refs/heads/{branch}") if ref_exists(app, f"refs/heads/{branch}") else ""
+            if not item.approved_head or tip != item.approved_head:
+                approved = item.approved_head[:8] or "nothing"
+                raise FactoryError(
+                    f"{branch} is at {tip[:8] or 'nothing'} but IT approved {approved}: only the approved "
+                    "commit is merged; new work goes through a new change"
+                )
+            tip = merge_fast_forward(app, item.slug)
         except ProjectError as e:
             raise FactoryError(str(e)) from e
         item.merged = True
@@ -1067,6 +1108,7 @@ class Foreman:
 
         Explicit by design: nothing leaves the machine unless IT runs this. The factory opens the pull
         request; merging it is IT's act on the host."""
+        self._refuse_abandoned(item)
         if role != "it":
             raise FactoryError("only IT publishes: it is the step that leaves this machine")
         by, _ = self._actor(role, by)
@@ -1239,6 +1281,11 @@ class Foreman:
         except KeyError:
             return
         target.approved_head = tip
+        for key in change.active_exceptions(self.today()):  # what IT allowed for the change ships with it
+            if key not in target.it_exceptions:
+                target.it_exceptions.append(key)
+            if key in change.exception_terms:
+                target.exception_terms[key] = change.exception_terms[key]
         self.store.save(target)
 
     @staticmethod
@@ -1316,8 +1363,11 @@ class Foreman:
         by, _ = self._actor(role, by)
         if item.kind == "app":
             raise FactoryError("only a change to an existing app can be abandoned")
-        if item.merged:
-            raise FactoryError(f"'{item.slug}' is already merged: revert it with a new change instead")
+        if item.merged or item.pr_state == "MERGED":
+            raise FactoryError(
+                f"'{item.slug}' is already merged (locally or on the host): revert it with a new change "
+                "instead" + (f"; run `factory sync {item.slug}` first" if not item.merged else "")
+            )
         if not reason.strip():
             raise FactoryError("abandoning needs a reason (it stays in the history)")
         app = self.app_dir(item)
