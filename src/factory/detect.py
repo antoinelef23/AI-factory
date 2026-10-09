@@ -16,6 +16,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from factory.project import GIT_TIMEOUT, git_argv, git_env
+
 SKIP_DIRS = {
     ".git",
     ".venv",
@@ -49,7 +51,13 @@ DEPENDENCY_DIRS = {"node_modules", ".venv", "venv", "vendor", "site-packages"}
 
 def _git_files(root: Path, *flags: str) -> list[str] | None:
     p = subprocess.run(
-        ["git", "ls-files", "-z", *flags], cwd=root, capture_output=True, text=True, encoding="utf-8"
+        git_argv("ls-files", "-z", *flags),
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=git_env(),
+        timeout=GIT_TIMEOUT,
     )
     return [n for n in p.stdout.split("\0") if n] if p.returncode == 0 else None
 

@@ -1124,7 +1124,7 @@ class Foreman:
             item.log("repo_created", f"private repository {item.repo}")
             self.store.save(item)
         add_remote(app, item.repo_url)
-        push_branch(app, branch)
+        push_branch(app, branch, item.repo_url)
         item.log("published", f"IT {by}: private repository {item.repo}".replace("  ", " "))
 
     def _pr_body(self, item: WorkItem) -> str:
@@ -1189,7 +1189,7 @@ class Foreman:
             f"origin/{head}..{head}" if ref_exists(app, f"refs/remotes/origin/{head}") else f"{base}..{head}"
         )
         self._verify_publishable(item, app, head, rev_range, accept_unverified)
-        push_branch(app, head)
+        push_branch(app, head, target.repo_url)
         if item.pr_url:
             item.log("published", f"IT {by}: branch updated, pull request {item.pr_url}".replace("  ", " "))
             return

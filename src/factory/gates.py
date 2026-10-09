@@ -11,6 +11,7 @@ from pathlib import Path
 from factory.detect import iter_files
 from factory.guard import check_project
 from factory.policy import check_dependencies
+from factory.project import ProjectError, run_git
 from factory.radar import Radar
 
 SECRET_PATTERNS = [
@@ -180,14 +181,15 @@ def secrets_in_history(app_dir: Path, rev_range: str) -> list[str]:
     deleted in a later commit is gone from the tree and still in the history that leaves the machine. Merge
     commits are diffed too (`-m`): a key can be introduced in a merge resolution. A key seen in several
     commits (a branch commit and the merge that brings it in) is reported once, at the newest commit."""
-    p = subprocess.run(
-        ["git", "log", "-p", "-m", "--no-color", "--no-ext-diff", "--format=%x00commit %H", rev_range],
-        cwd=app_dir,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    # --text --no-textconv: a .gitattributes the agent wrote (`*.env -diff`) cannot hide a file's lines (A58).
+    try:
+        p = run_git(
+            app_dir,
+            "log", "-p", "-m", "--text", "--no-textconv", "--no-color", "--no-ext-diff",
+            "--format=%x00commit %H", rev_range,
+        )  # fmt: skip
+    except ProjectError as e:
+        raise ValueError(str(e)) from e
     if p.returncode != 0:
         raise ValueError(f"git log {rev_range} failed in {app_dir}: {(p.stderr or p.stdout).strip()[-300:]}")
     hits: list[str] = []

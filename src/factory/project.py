@@ -8,9 +8,11 @@ commits made by agents never borrow the operator's personal git configuration.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 IDENTITY = ("AI Factory", "factory@localhost")
@@ -56,11 +58,113 @@ Run: auto
 """
 
 
+# Host-side git runs in folders an agent wrote to. Whatever an app's .git or the operator's own git config
+# carries, the factory's git calls run no hook, no fsmonitor command, no signing program and no prompt
+# (audit A1, A152). The app's .git/config is also held to an allowlist below: anything else in it (a filter,
+# textconv, credential helper, pushurl, include, alias...) can run a program or redirect a push, so the
+# factory refuses to touch the app until a human has looked at it.
+GIT_TIMEOUT = 300
+_no_hooks: list[str] = []
+
+
+def _no_hooks_dir() -> str:
+    """An empty directory for core.hooksPath, created once per process (outside every app)."""
+    if not _no_hooks:
+        _no_hooks.append(Path(tempfile.mkdtemp(prefix="factory-nohooks-")).as_posix())
+    return _no_hooks[0]
+
+
+def git_argv(*args: str) -> list[str]:
+    """`git *args` with everything that could run a program from repository or user config turned off."""
+    return [
+        "git",
+        "-c", f"core.hooksPath={_no_hooks_dir()}",
+        "-c", "core.fsmonitor=false",
+        "-c", "commit.gpgsign=false",
+        "-c", "tag.gpgsign=false",
+        "-c", "protocol.ext.allow=never",
+        *args,
+    ]  # fmt: skip
+
+
+def git_env() -> dict[str, str]:
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+
+ALLOWED_GIT_CONFIG = re.compile(
+    r"(core\.(repositoryformatversion|filemode|bare|logallrefupdates|symlinks|ignorecase|precomposeunicode"
+    r"|autocrlf)"
+    r"|user\.(name|email)"
+    r"|extensions\.objectformat"
+    r"|branch\..+\.(remote|merge|factory-base)"
+    r"|remote\.[^.]+\.(url|fetch|gh-resolved))"
+)
+_checked_configs: set[tuple[str, int, int]] = set()
+
+
+def check_git_dir(app: Path) -> None:
+    """Refuse an app whose .git could make host git run a program or push elsewhere (see ALLOWED_GIT_CONFIG).
+
+    Read with `git config --file`, outside every repository and without includes, so reading it runs nothing
+    either. Checked again only when the file changes."""
+    dot_git = app / ".git"
+    if not dot_git.exists() and not dot_git.is_symlink():
+        return
+    if dot_git.is_symlink() or not dot_git.is_dir():
+        raise ProjectError(
+            f"{dot_git} is not a plain directory (a pointer to another repository?): the factory only works "
+            "in the app's own repository; inspect it and remove it"
+        )
+    config = dot_git / "config"
+    if not config.is_file():
+        return
+    st = config.stat()
+    key = (str(config.resolve()), st.st_mtime_ns, st.st_size)
+    if key in _checked_configs:
+        return
+    neutral = _no_hooks_dir()
+    p = subprocess.run(
+        git_argv("config", "--file", str(config), "--no-includes", "--name-only", "--list"),
+        cwd=neutral,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**git_env(), "GIT_CEILING_DIRECTORIES": str(Path(neutral).parent)},
+        timeout=GIT_TIMEOUT,
+    )
+    if p.returncode != 0:
+        raise ProjectError(f"{config} is not a readable git config: {(p.stderr or p.stdout).strip()[-300:]}")
+    unexpected = sorted({n for n in p.stdout.splitlines() if n and not ALLOWED_GIT_CONFIG.fullmatch(n)})
+    if unexpected:
+        raise ProjectError(
+            f"{config} carries settings the factory does not allow: {', '.join(unexpected[:8])}. They can "
+            "run a program or redirect a push; an agent may have planted them. Inspect, remove them, retry"
+        )
+    _checked_configs.add(key)
+
+
+def run_git(app: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """The one way the factory runs git in an app (hardened argv, allowlisted .git/config, timeout)."""
+    check_git_dir(app)
+    try:
+        return subprocess.run(
+            git_argv(*args),
+            cwd=app,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=git_env(),
+            timeout=GIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ProjectError(f"git {' '.join(args)} timed out after {GIT_TIMEOUT}s in {app}") from e
+
+
 def _git_raw(app: Path, *args: str) -> str:
     """git's stdout exactly as printed: `status --porcelain` lines start with a significant space."""
-    p = subprocess.run(
-        ["git", *args], cwd=app, capture_output=True, text=True, encoding="utf-8", errors="replace"
-    )
+    p = run_git(app, *args)
     if p.returncode != 0:
         raise ProjectError(f"git {' '.join(args)} failed in {app}: {(p.stderr or p.stdout).strip()[-300:]}")
     return p.stdout
@@ -101,13 +205,7 @@ def prepare_project(app: Path) -> bool:
     _git(app, "config", "user.email", IDENTITY[1])
     _git(app, "config", "core.autocrlf", "false")
     _ignore_runtime_state(app)  # local exclude file: not a change of the app
-    has_commit = (
-        subprocess.run(
-            ["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=app, capture_output=True
-        ).returncode
-        == 0
-    )
-    if not has_commit:
+    if not ref_exists(app, "HEAD"):
         _git(app, "add", "-A")
         _git(app, "commit", "-q", "-m", INITIAL_COMMIT)
         changed = True
@@ -238,12 +336,7 @@ def current_branch(app: Path) -> str:
 
 
 def branch_exists(app: Path, branch: str) -> bool:
-    return (
-        subprocess.run(
-            ["git", "rev-parse", "--verify", "-q", f"refs/heads/{branch}"], cwd=app, capture_output=True
-        ).returncode
-        == 0
-    )
+    return ref_exists(app, f"refs/heads/{branch}")
 
 
 def begin_change(app: Path, slug: str) -> tuple[str, str]:
@@ -323,9 +416,7 @@ def abandon_change(app: Path, slug: str) -> None:
 
 
 def remote_url(app: Path, name: str = "origin") -> str:
-    p = subprocess.run(
-        ["git", "remote", "get-url", name], cwd=app, capture_output=True, text=True, encoding="utf-8"
-    )
+    p = run_git(app, "remote", "get-url", name)
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
@@ -338,7 +429,13 @@ def add_remote(app: Path, url: str, name: str = "origin") -> None:
         _git(app, "remote", "add", name, url)
 
 
-def push_branch(app: Path, branch: str, remote: str = "origin") -> None:
+def push_branch(app: Path, branch: str, url: str, remote: str = "origin") -> None:
+    """Push `branch` to `remote`, which must still point at `url`: never wherever the app's config says."""
+    actual = remote_url(app, remote)
+    if actual != url:
+        raise ProjectError(
+            f"remote '{remote}' of {app} points to {actual or 'nothing'}, not {url}: refusing to push"
+        )
     _git(app, "push", "-q", "-u", remote, branch)
 
 
@@ -371,13 +468,7 @@ def head_sha(app: Path) -> str:
     """HEAD of the app's OWN git repository ("" when it is not one: never a parent repository's HEAD)."""
     if not (app / ".git").exists():
         return ""
-    p = subprocess.run(
-        ["git", "rev-parse", "--verify", "-q", "HEAD"],
-        cwd=app,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
+    p = run_git(app, "rev-parse", "--verify", "-q", "HEAD")
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
@@ -401,10 +492,7 @@ def post_approval_changes(app: Path, slug: str, since: str) -> list[str]:
 
 
 def ref_exists(app: Path, ref: str) -> bool:
-    return (
-        subprocess.run(["git", "rev-parse", "--verify", "-q", ref], cwd=app, capture_output=True).returncode
-        == 0
-    )
+    return run_git(app, "rev-parse", "--verify", "-q", ref).returncode == 0
 
 
 def rev_parse(app: Path, ref: str) -> str:
