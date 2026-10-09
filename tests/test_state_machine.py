@@ -116,3 +116,11 @@ def test_an_open_change_on_a_folder_outside_git_hides_nothing_from_drift(tmp_pat
     (tmp_path / "orders").mkdir()
     change = WorkItem(slug="add", title="Add", idea="i", maturity="poc", kind="feature", target="orders")
     assert _apps_on_a_change_branch([change], tmp_path) == set()
+
+
+def test_ship_approval_refuses_a_tree_dirtied_after_the_gates(foreman):
+    item = foreman.run(foreman.intake("Z", "an api", "poc"))
+    item = foreman.approve(foreman.approve(item, "business"), "owner")
+    (foreman.app_dir(item) / "late.py").write_text("x = 1\n", encoding="utf-8")  # never gated
+    with pytest.raises(FactoryError, match="uncommitted changes since the gates ran: late.py"):
+        foreman.approve(item, "it")

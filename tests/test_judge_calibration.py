@@ -10,12 +10,17 @@ from pathlib import Path
 import pytest
 
 from factory.agents import ClaudeRunner
+from factory.config import load_config
 from factory.judge import RUBRICS, CriterionScore, JudgeReport, judge_panel
-from tests.calibration import DEGRADATIONS, compare, grounded_scores
+from tests.calibration import DEGRADATIONS, compare, grounded_scores, invention_caught
 
 FIXTURE = Path(__file__).resolve().parents[1] / "evals" / "judge_calibration" / "ping-service"
 # Billed runs: JUDGE_VOTES=3 calibrates the judge as the factory runs it (a panel, median per criterion).
-VOTES = int(os.environ.get("JUDGE_VOTES", "1"))
+# What `just calibrate` measures by default is the judge the factory really uses (factory.toml), not a cheaper
+# stand-in; JUDGE_MODEL / JUDGE_VOTES override it for an experiment.
+_CFG = load_config(Path(__file__).resolve().parents[1])
+MODEL = os.environ.get("JUDGE_MODEL") or _CFG.models.get("judge") or "sonnet"
+VOTES = int(os.environ.get("JUDGE_VOTES") or _CFG.judge_votes)
 SPEC = (FIXTURE / "spec.md").read_text(encoding="utf-8")
 IDEA = (FIXTURE / "idea.md").read_text(encoding="utf-8").split("## What the business wants")[1].strip()
 
@@ -52,15 +57,17 @@ def test_vague_removes_the_concrete_outcomes():
     assert out.count("  - And the JSON body equals") == 0
 
 
-def test_the_baseline_is_a_real_agent_written_spec():
-    assert SPEC.count("**INV-") >= 5 and SPEC.count("**BHV-") >= 5 and "## 7. Evals" in SPEC
+def test_the_baseline_has_everything_the_degradations_cut():
+    """Hand-corrected from the agent-written original (audit A73): faithful to the idea, still complete."""
+    assert SPEC.count("**INV-") >= 1 and SPEC.count("**BHV-") >= 3 and "## 7. Evals" in SPEC
+    assert "## 5. Examples" in SPEC and "## 6. Non-goals" in SPEC and "  - Then " in SPEC
 
 
 def test_vague_also_blurs_the_eval_thresholds():
     out = DEGRADATIONS["vague"][0](SPEC)
     rows = [ln for ln in SPEC.splitlines() if ln.startswith("| EVAL-")]
     assert rows and out.count("works well |") == len(rows)  # every eval row lost its threshold
-    assert "300 of 300 responses identical" in SPEC and "300 of 300" not in out
+    assert "1 of 1 pass" in SPEC and "1 of 1 pass" not in out
 
 
 # ------------------------------------------------------------ free: judging the judge's comparison logic
@@ -106,6 +113,40 @@ def test_compare_ignores_ungrounded_scores_and_unreliable_answers():
     assert grounded_scores(ungrounded) == {}
 
 
+def test_compare_averages_only_the_criteria_grounded_in_both_runs():
+    base = report({"testability": 5, "unambiguity": 4})
+    degraded = report({"testability": 4, "unambiguity": 4, "scope": 1})  # scope is not in the baseline
+    verdict, detail = compare(base, degraded, ("testability",))
+    assert verdict == "caught" and "avg over 2 shared 4.50 -> 4.00" in detail
+
+
+def test_an_invention_is_caught_only_on_grounded_fidelity_or_scope():
+    assert invention_caught({"fidelity": 3, "examples": 5})
+    assert invention_caught({"scope": 2})
+    assert not invention_caught({"fidelity": 4, "scope": 5})
+    assert not invention_caught({"examples": 2})  # missing criteria are not a pass
+
+
+def test_calibration_measures_the_production_judge_by_default():
+    from factory.config import load_config as load
+
+    cfg = load(Path(__file__).resolve().parents[1])
+    if not os.environ.get("JUDGE_MODEL"):
+        assert MODEL == cfg.models["judge"]
+    if not os.environ.get("JUDGE_VOTES"):
+        assert VOTES == cfg.judge_votes
+
+
+def test_the_known_good_baseline_invents_nothing_the_idea_does_not_ask():
+    """The baseline once carried a latency KPI, a smoke run and three edge-case behaviors the idea never
+    asked for, which the rubric itself forbids (audit A73)."""
+    from factory.speclint import lint_spec
+
+    assert lint_spec(SPEC).ok
+    for invented in ("p95", "smoke", "404", "405", "?x=1", "exactly the keys"):
+        assert invented not in SPEC, invented
+
+
 def test_compare_uses_the_best_comparable_target_criterion():
     base, bad = report({"testability": 5, "unambiguity": 5}), report({"testability": 5, "unambiguity": 3})
     assert compare(base, bad, ("unambiguity", "testability"))[0] == "caught"
@@ -116,10 +157,11 @@ def test_compare_uses_the_best_comparable_target_criterion():
 
 @pytest.mark.live
 def test_the_judge_notices_degraded_specs(capsys):
-    """Opt-in (`just calibrate`, billed). JUDGE_MODEL picks the model (default: haiku, the factory's default).
+    """Opt-in (`just calibrate`, billed). Measures the production judge (factory.toml) unless JUDGE_MODEL /
+    JUDGE_VOTES say otherwise.
 
     Passing means: the good spec is not failed, and every degradation that can be evaluated was caught."""
-    model = os.environ.get("JUDGE_MODEL", "haiku")
+    model = MODEL
     runner = ClaudeRunner()
 
     def run(text):
@@ -166,15 +208,13 @@ def test_the_about_fixture_is_the_spec_that_invented_an_edge_case():
 @pytest.mark.live
 def test_the_judge_notices_an_edge_case_the_idea_never_asked_for(capsys):
     """Opt-in (billed, about $0.05-0.17). The judge must not wave this spec through on fidelity or scope."""
-    model = os.environ.get("JUDGE_MODEL", "sonnet")
+    model = MODEL
     rep = judge_panel(ClaudeRunner(), "spec", ABOUT_SPEC, ABOUT_IDEA, votes=VOTES, model=model, cwd=ABOUT)
     scores = grounded_scores(rep)
     with capsys.disabled():
         print(f"\nabout-endpoint {rep.verdict} {rep.average:.2f} {scores} cost ${rep.cost_usd:.2f}")
     assert rep.verdict != "unreliable"
-    assert min(scores.get("fidelity", 5), scores.get("scope", 5)) <= 3 or rep.verdict == "revise", (
-        f"the {model} judge let an invented requirement through: {scores}"
-    )
+    assert invention_caught(scores), f"the {model} judge let an invented requirement through: {scores}"
 
 
 def test_the_examples_criterion_never_demands_an_edge_case_the_idea_did_not_ask_for():

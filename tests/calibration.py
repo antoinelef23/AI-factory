@@ -70,8 +70,19 @@ def compare(base, degraded, targets: tuple[str, ...]) -> tuple[str, str]:
     if not comparable:
         return "inconclusive", f"no grounded score for {targets} in both runs (baseline has {sorted(b)})"
     drop = max(b[t] - d[t] for t in comparable)
+    # Averages over the criteria grounded in BOTH runs: two reports averaged over different subsets are not
+    # comparable (one ungrounded criterion would move the average by itself).
+    common = sorted(set(b) & set(d))
+    avg_b, avg_d = (sum(s[k] for k in common) / len(common) for s in (b, d))
     detail = (
-        f"max drop {drop} on {comparable}, avg {base.average:.2f} -> {degraded.average:.2f}, "
+        f"max drop {drop} on {comparable}, avg over {len(common)} shared {avg_b:.2f} -> {avg_d:.2f}, "
         f"{degraded.verdict}"
     )
-    return ("caught" if drop >= 1 and degraded.average < base.average else "missed"), detail
+    return ("caught" if drop >= 1 and avg_d < avg_b else "missed"), detail
+
+
+def invention_caught(scores: dict[str, int]) -> bool:
+    """The judge noticed an invented requirement: fidelity or scope scored with grounded evidence, at most 3.
+    A missing criterion is not a pass (it once defaulted to 5), nor is a mere "revise" for another reason."""
+    grounded = [scores[k] for k in ("fidelity", "scope") if k in scores]
+    return bool(grounded) and min(grounded) <= 3
