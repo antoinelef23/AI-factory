@@ -116,12 +116,19 @@ def test_the_clean_tree_gate_rejects_a_dirty_app(foreman):
     assert not res.ok and "late_edit.py" in res.detail
 
 
-def test_the_clean_tree_gate_does_not_apply_to_an_app_that_is_not_a_git_project(foreman):
+def test_a_new_app_is_a_git_project_before_any_agent_runs_so_clean_tree_judges_a_commit(foreman):
     item = foreman.run(foreman.intake("X", "an api", "mvp"))
     item = foreman.approve(foreman.approve(item, "business"), "it")
-    item = foreman.approve(item, "owner")  # single-agent offline build: no git repo
-    assert item.status == "waiting"
-    assert "not applicable: the app is not a git project" in foreman.store.read(item, "gate-report.md")
+    item = foreman.approve(item, "owner")  # offline build: the scaffold is committed, nothing else
+    assert item.status == "waiting" and item.gated_sha
+    assert "## clean_tree: PASS" in foreman.store.read(item, "gate-report.md")
+
+
+def test_the_clean_tree_gate_fails_closed_on_an_app_that_is_not_a_git_project(foreman):
+    item = foreman.run(foreman.intake("X", "an api", "mvp"))
+    foreman.app_dir(item).mkdir(parents=True)
+    result = foreman._clean_tree_gate(item)
+    assert not result.ok and "not a git project" in result.detail
 
 
 def test_clean_tree_is_an_mvp_and_prod_gate_only(factory_root):

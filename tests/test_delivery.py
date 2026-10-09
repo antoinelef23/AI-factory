@@ -440,23 +440,30 @@ def test_approval_is_refused_if_the_app_moved_after_the_gates(foreman):
     item = foreman.run(foreman.intake("Z", "an api", "poc"))
     item = foreman.approve(item, "business")
     item = foreman.approve(item, "owner")  # builds and gates; waits for IT
-    assert item.stage == "ship_review" and item.gated_sha == ""  # offline POC: not a git project yet
-    item.gated_sha = "0" * 40  # pretend the gates judged another commit
-    prepare = foreman.app_dir(item)
-    from factory.project import prepare_project
-
-    prepare_project(prepare)
+    folder = foreman.app_dir(item)
+    assert item.stage == "ship_review" and item.gated_sha == git(folder, "rev-parse", "HEAD")
+    (folder / "late.py").write_text("x = 1\n", encoding="utf-8")
+    git(folder, "add", "-A")
+    git(folder, "commit", "-q", "-m", "a commit nobody gated")
     with pytest.raises(FactoryError, match="the app changed after the gates ran"):
         foreman.approve(item, "it")
 
 
-def test_approval_commits_an_app_that_was_never_in_git_and_records_its_head(foreman):
+def test_the_approved_head_is_the_gated_commit_of_an_app_in_git_from_the_start(foreman):
     item = foreman.run(foreman.intake("Z", "an api", "poc"))
     item = foreman.approve(foreman.approve(item, "business"), "owner")
     folder = foreman.app_dir(item)
-    assert not (folder / ".git").exists()
+    gated = item.gated_sha
     done = foreman.approve(item, "it")
-    assert done.approved_head == git(folder, "rev-parse", "HEAD") and (folder / ".git").exists()
+    assert done.approved_head == gated == git(folder, "rev-parse", "HEAD")
+
+
+def test_an_item_gated_as_a_loose_folder_must_be_rebuilt_before_approval(foreman):
+    item = foreman.run(foreman.intake("Z", "an api", "poc"))
+    item = foreman.approve(foreman.approve(item, "business"), "owner")
+    item.gated_sha = ""  # gated before every app was kept in git
+    with pytest.raises(FactoryError, match="never judged a commit"):
+        foreman.approve(item, "it")
 
 
 # ------------------------------------------------------------------ phase 3: delivery correctness

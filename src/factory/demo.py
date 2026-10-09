@@ -81,15 +81,13 @@ def run_demo(source: Path, say: Say = print, with_tests: bool = False) -> None:
 
         step("5. An agent sneaks in a forbidden dependency (Flask is on hold)")
         pyproject = app / "pyproject.toml"
-        original = pyproject.read_text(encoding="utf-8")
-        pyproject.write_text(
-            original.replace('"pydantic>=2.7",', '"pydantic>=2.7",\n    "flask",'), encoding="utf-8"
-        )
+        original = pyproject.read_bytes()  # restored byte for byte: the gated commit must stay clean
+        pyproject.write_bytes(original.replace(b'"pydantic>=2.7",', b'"pydantic>=2.7",\n    "flask",'))
         report = check_project(app, f.radar, "poc")
         for v in report.blocking():
             say(f"  BLOCKED {v.describe()}")
         expect([v.key for v in report.blocking()] == ["flask"], "radar guard missed the Flask dependency")
-        pyproject.write_text(original, encoding="utf-8")
+        pyproject.write_bytes(original)
         expect(check_project(app, f.radar, "poc").ok(), "guard should pass once Flask is removed")
         say("  removed -> radar guard passes again")
 

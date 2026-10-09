@@ -90,6 +90,15 @@ from factory.templates import (
 )
 from factory.workitem import ROLES, STEP_BY_NAME, STEPS, Store, WorkItem
 
+APP_BUILD_COMMIT = """feat({slug}): the app built by the build agent
+
+Why: a single build agent does not commit; the factory records its work as one commit so that the gates,
+IT's approval and the publish all judge the same commit.
+
+Artifacts: {files}
+Run: auto
+"""
+
 FIX_AFTER_REVIEW_COMMIT = """fix({slug}): targeted fix after a failed factory gate
 
 Why: Claudo built the plan and its reviewer ran, then a factory gate failed; one agent fixed what the gate
@@ -467,8 +476,14 @@ class Foreman:
     def _check_gated_head(self, item: WorkItem) -> None:
         """IT approves exactly what the gates judged: refuse if the app moved or got dirty since."""
         app = self.app_dir(item)
-        if not item.gated_sha or not app.is_dir():
+        if not app.is_dir():
             return
+        if not item.gated_sha:
+            raise FactoryError(
+                "the gates never judged a commit of this app (it was gated as a loose folder, before the "
+                "factory kept every app in git): reject it so it is rebuilt and gated again: "
+                f'`factory reject {item.slug} --as it --reason "..."`'
+            )
         if head_sha(app) != item.gated_sha:
             raise FactoryError(
                 f"the app changed after the gates ran (gated {item.gated_sha[:8]}, now "
@@ -484,15 +499,10 @@ class Foreman:
             )
 
     def _seal_approved_head(self, item: WorkItem) -> None:
-        """Record the commit IT approves. An app the single agent built outside git is committed here, as the
-        very tree the gates judged, so that what is approved, and later published, is a commit."""
+        """Record the commit IT approves (the gated one: _check_gated_head ran just before)."""
         app = self.app_dir(item)
-        if not app.is_dir():
-            return
-        if not item.gated_sha:  # never in git when the gates ran: the tree IS what was gated
-            prepare_project(app)
-            commit_leftovers(app, item.slug)
-        item.approved_head = head_sha(app)
+        if app.is_dir():
+            item.approved_head = head_sha(app)
 
     def reject(self, item: WorkItem, role: str, reason: str, by: str = "") -> WorkItem:
         self._require_checkpoint(item, role)
@@ -1097,7 +1107,7 @@ class Foreman:
 
     def _publish_app(self, item: WorkItem, host: GitHost, by: str, accept_unverified: bool) -> None:
         app = self.app_dir(item)
-        prepare_project(app)  # a git repo with a local identity (a POC from the single agent has none yet)
+        prepare_project(app)  # idempotent; an app gated before every app was kept in git has none yet
         branch = current_branch(app)
         if branch.startswith("factory/"):
             # A change is in flight: publish the app as it was BEFORE it (the change goes as a pull request).
@@ -1364,6 +1374,16 @@ class Foreman:
         triplet = app / "work" / item.slug
         triplet.mkdir(parents=True, exist_ok=True)
         self._copy_triplet(item, triplet)
+        if not (app / ".git").exists():
+            # A new app is a git project BEFORE any agent touches it: its .git is the factory's (mounted
+            # read-only in the sandbox), and every gate and approval judges a commit, never a loose tree.
+            if self.runner is not None:  # the lockfile is part of the scaffold (no uv.lock scope drift later)
+                rc, out = self.locker(app)
+                item.log(
+                    "lock",
+                    "uv.lock created with the scaffold" if rc == 0 else f"uv lock failed ({rc}): {out}",
+                )
+            prepare_project(app)
         if self.runner is None:
             return True, f"{detail}; offline build (scaffold only, no agent)"
         # Claudo executes the approved plan task by task (DAG, per-task verify, evals, reviewer panel).
@@ -1384,18 +1404,16 @@ class Foreman:
         if not result.ok:
             return False, f"{detail}; build agent failed: {result.error}"
         self.store.write(item, "build-summary.md", result.text.strip() + "\n")
-        if item.claudo_cp and (app / ".git").exists():
-            # A fix after Claudo's run: committed (the clean-tree gate ships commits only) and shown to IT,
-            # because Claudo's reviewer never saw it.
-            fixed = commit_all(app, FIX_AFTER_REVIEW_COMMIT.replace("{slug}", item.slug))
-            if fixed:
-                listed = ", ".join(fixed[:8]) + (f" (+{len(fixed) - 8} more)" if len(fixed) > 8 else "")
-                self._add_ack(item, "fixed_after_review", f"{listed}: changed after Claudo's review")
-                return (
-                    True,
-                    f"{detail}; fixed by agent after Claudo's review (${result.cost_usd:.2f}): {listed}",
-                )
-        return True, f"{detail}; built by agent (${result.cost_usd:.2f})"
+        if not item.claudo_cp:
+            built = commit_all(app, APP_BUILD_COMMIT.replace("{slug}", item.slug))
+            return True, f"{detail}; built by agent (${result.cost_usd:.2f}), {len(built)} file(s) committed"
+        # A fix after Claudo's run: committed apart and shown to IT, because Claudo's reviewer never saw it.
+        fixed = commit_all(app, FIX_AFTER_REVIEW_COMMIT.replace("{slug}", item.slug))
+        if not fixed:
+            return True, f"{detail}; the fix agent changed nothing (${result.cost_usd:.2f})"
+        listed = ", ".join(fixed[:8]) + (f" (+{len(fixed) - 8} more)" if len(fixed) > 8 else "")
+        self._add_ack(item, "fixed_after_review", f"{listed}: changed after Claudo's review")
+        return True, f"{detail}; fixed by agent after Claudo's review (${result.cost_usd:.2f}): {listed}"
 
     def _containment(self, item: WorkItem) -> str:
         """Decide where this build's agent code runs (item.build_where); a refusal when it may not start.
@@ -1476,7 +1494,9 @@ class Foreman:
         """What gets delivered is the git HEAD: every gate must have judged exactly that."""
         app = self.app_dir(item)
         if not (app / ".git").exists():
-            return GateResult("clean_tree", True, "not applicable: the app is not a git project")
+            return GateResult(
+                "clean_tree", False, "the app is not a git project: nothing to deliver as a commit"
+            )
         dirty = porcelain(app)
         detail = "uncommitted changes: " + ", ".join(dirty[:10]) if dirty else "HEAD is the delivered state"
         return GateResult("clean_tree", not dirty, detail)
@@ -1490,11 +1510,6 @@ class Foreman:
 
     def _build_with_claudo(self, item: WorkItem, app: Path, scaffold: str) -> tuple[bool, str]:
         assert self.engine is not None
-        if item.kind == "app" and not (app / ".git").exists():  # a new app: lock before its first commit
-            rc, out = self.locker(app)
-            item.log(
-                "lock", "uv.lock created with the scaffold" if rc == 0 else f"uv lock failed ({rc}): {out}"
-            )
         prepare_project(app)  # git repo + local identity + `evals` recipe: what the orchestrator needs
         if item.claudo_rejection:  # IT said no at the ship review: Claudo reopens the tasks with the reason
             rej = item.claudo_rejection
