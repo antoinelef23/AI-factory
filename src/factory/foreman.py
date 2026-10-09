@@ -996,7 +996,7 @@ class Foreman:
         where = f"branch factory/{item.slug} from {item.base_branch}"
         if self.runner is None:
             return True, f"{where}; offline build (no agent: the app is unchanged)"
-        if self._uses_claudo(item) and (not item.claudo_cp or item.claudo_rejection):
+        if self._uses_claudo(item) and self._claudo_builds_next(item):
             return self._build_with_claudo(item, app, where)
         forbidden = [t.name for t in self.radar.techs if verdict(t, item.maturity) == BLOCK]
         result = self._builder(item).run(
@@ -1013,6 +1013,11 @@ class Foreman:
         self.store.write(item, "build-summary.md", result.text.strip() + "\n")
         message = CHANGE_BUILD_COMMIT.replace("{slug}", item.slug).replace("{kind}", item.kind)
         committed = commit_all(app, message)
+        if item.built_with_claudo and committed:  # Claudo's reviewer never saw this fix
+            listed = ", ".join(committed[:8]) + (
+                f" (+{len(committed) - 8} more)" if len(committed) > 8 else ""
+            )
+            self._add_ack(item, "fixed_after_review", f"{listed}: changed after Claudo's review")
         return True, f"{where}; built by agent (${result.cost_usd:.2f}), {len(committed)} file(s) changed"
 
     def merge(self, item: WorkItem, role: str, by: str = "") -> WorkItem:
@@ -1401,7 +1406,7 @@ class Foreman:
         # Claudo executes the approved plan task by task (DAG, per-task verify, evals, reviewer panel).
         # After a clean Claudo run, a failed FACTORY gate (radar, secrets...) is a targeted fix for one
         # agent below, not a replay of the whole plan; an IT rejection goes back through Claudo.
-        if self._uses_claudo(item) and (not item.claudo_cp or item.claudo_rejection):
+        if self._uses_claudo(item) and self._claudo_builds_next(item):
             return self._build_with_claudo(item, app, detail)
         forbidden = [t.name for t in self.radar.techs if verdict(t, item.maturity) == BLOCK]
         result = self._builder(item).run(
@@ -1416,7 +1421,7 @@ class Foreman:
         if not result.ok:
             return False, f"{detail}; build agent failed: {result.error}"
         self.store.write(item, "build-summary.md", result.text.strip() + "\n")
-        if not item.claudo_cp:
+        if not item.built_with_claudo:
             built = commit_all(app, APP_BUILD_COMMIT.replace("{slug}", item.slug))
             return True, f"{detail}; built by agent (${result.cost_usd:.2f}), {len(built)} file(s) committed"
         # A fix after Claudo's run: committed apart and shown to IT, because Claudo's reviewer never saw it.
@@ -1426,6 +1431,11 @@ class Foreman:
         listed = ", ".join(fixed[:8]) + (f" (+{len(fixed) - 8} more)" if len(fixed) > 8 else "")
         self._add_ack(item, "fixed_after_review", f"{listed}: changed after Claudo's review")
         return True, f"{detail}; fixed by agent after Claudo's review (${result.cost_usd:.2f}): {listed}"
+
+    @staticmethod
+    def _claudo_builds_next(item: WorkItem) -> bool:
+        """Claudo builds (or reworks) the plan; otherwise one agent makes a targeted fix of what failed."""
+        return not item.built_with_claudo or bool(item.claudo_rejection) or item.claudo_rework_pending
 
     def _containment(self, item: WorkItem) -> str:
         """Decide where this build's agent code runs (item.build_where); a refusal when it may not start.
@@ -1574,11 +1584,12 @@ class Foreman:
         prepare_project(app)  # git repo + local identity + `evals` recipe: what the orchestrator needs
         if item.claudo_rejection:  # IT said no at the ship review: Claudo reopens the tasks with the reason
             rej = item.claudo_rejection
-            if item.claudo_cp_consumed:  # rejected after a re-decision: the checkpoint must be pending again
-                self.engine.reopen_checkpoint(app, item.slug, rej["cp"])
-                item.claudo_cp_consumed = False
+            # Pending again whatever happened since (a re-decision, or a final run that failed after the
+            # token was consumed: audit A50); a no-op when Claudo never passed it.
+            self.engine.reopen_checkpoint(app, item.slug, rej["cp"])
+            item.claudo_cp_consumed = False
             self.engine.reject_checkpoint(app, item.slug, rej["cp"], rej["reason"], rej["by"])
-            item.claudo_rejection = {}
+            item.claudo_rejection, item.claudo_rework_pending = {}, True
         # A new round of the checkpoint: a fresh nonce, so no token from an earlier round verifies again.
         item.approval_nonce = secrets.token_hex(16)
         if not self.engine.supports_nonce():
@@ -1595,6 +1606,7 @@ class Foreman:
         self._add_claudo_cost(item, app)
         if res.ok:
             self._commit_leftovers(item, app)
+            item.built_with_claudo, item.claudo_rework_pending = True, False
         if res.outcome == "checkpoint":
             item.claudo_cp = res.checkpoint
             review = self.engine.review_verdict(app, item.slug, res.checkpoint)
@@ -1720,7 +1732,7 @@ class Foreman:
         return GateResult("immutable", not problems, detail)
 
     def _trajectory_gate(self, item: WorkItem) -> GateResult:
-        if self.engine is None or not item.claudo_cp:
+        if self.engine is None or not item.built_with_claudo:
             return GateResult("trajectory", True, "not applicable: this item was not built through Claudo")
         ok, out = self.engine.trajectory(self.app_dir(item), item.slug)
         return GateResult("trajectory", ok, out or "ok")

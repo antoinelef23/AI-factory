@@ -91,6 +91,12 @@ class WorkItem:
     claudo_review: dict = field(default_factory=dict)  # {cp, verdict, report}: Claudo's reviewer, shown to IT
     claudo_cost_seen: float = 0.0  # Claudo journal spend already added to cost_usd
     claudo_cp: str = ""  # human checkpoint Claudo is paused at (e.g. CP-1); "" = none pending
+    # Claudo built this item (its plan ran task by task, its reviewer read it): a later gate failure is a
+    # targeted fix shown to IT, and the trajectory gate applies. Distinct from claudo_cp (audit A45).
+    built_with_claudo: bool = False
+    # IT rejected at the ship review and Claudo has not yet produced the rework: the next build is Claudo's
+    # again, even if an attempt failed (audit A49).
+    claudo_rework_pending: bool = False
     # {kind, detail}: what IT must acknowledge with --note to ship (e.g. scope drift the factory committed)
     ship_acks: list[dict] = field(default_factory=list)
     gated_sha: str = ""  # app HEAD the passing gates judged ("" = the app was not a git project yet)
@@ -136,6 +142,8 @@ class WorkItem:
     @classmethod
     def from_dict(cls, data: dict) -> WorkItem:
         known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        if "built_with_claudo" not in data and data.get("claudo_cp"):  # saved before the flag existed
+            known["built_with_claudo"] = True
         return cls(**known)
 
 
