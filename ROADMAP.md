@@ -346,7 +346,7 @@ green on Windows; factory `just check` green.
 | P2-2 | partial | One branch `factory/<slug>` and one PR per change, with intent, gates, reviewer verdict, acknowledgements, approvals, cost. Not per build attempt |
 | P2-3 | partial | `factory sync` detects the merge (ff, squash and merge-commit) and updates the local app. Manual: no webhook, no `pr_open` stage |
 | P2-4 | partial | `factory sync` reads the PR's CI back (pass/fail/pending/none, failing checks), `show` displays it, a merge over failing CI is logged. Not enforced: the factory never merges, branch protection on the host is where CI blocks a merge |
-| P2-5 | open | No GitHub issue intake |
+| P2-5 | done (2026-10-09) | `factory inbox`: labelled issues become items (dedupe by the issue's GitHub id), progress is commented back, a closed issue parks its item; with identity on, only business-role authors are taken |
 | P2-6 | done | `factory change` (feature / bug / migration) on a branch of the existing app, design = existing stack judged by the current radar, tests that rewrite existing tests need IT's acknowledgement |
 | P2-7 | partial | Factory commits carry `Why:` and `Run:` trailers; task commits come from Claudo's own format |
 | P2-8 | done | `GitHost` protocol (7 methods) with a `gh` adapter and a test double over real bare repos. No GitLab / Azure stubs |
@@ -372,7 +372,7 @@ a feature item on an existing repo produces a PR whose diff passes the radar gat
 | P3-9 | Smarter capability extraction | LLM extracts capabilities from the idea as structured output, validated against the radar's categories; technology choice stays deterministic (P1) |
 | P3-10 | Radar-aware spec hints | Triage flags early when an idea needs a capability the radar cannot fill (gap → IT question before spec) |
 
-**Status (2026-10-08):**
+**Status (2026-10-09):**
 
 | ID | Status | What exists / what is missing |
 |---|---|---|
@@ -380,7 +380,11 @@ a feature item on an existing repo produces a PR whose diff passes the radar gat
 | P3-2 | done | `factory radar-diff old new`: what moved ring, what it newly forbids, which apps are affected |
 | P3-6 | partial | `factory drift` (exit 1 on drift) and `factory drift --open` open migration items. Not scheduled: run it from CI or a scheduler |
 | P3-7 | done | Exceptions carry a reason, an owner and an expiry; lapsed ones stop sheltering their technology in the gate and in drift |
-| P3-3, P3-4, P3-5, P3-8, P3-9, P3-10 | open | Version constraints, licence and vulnerability policy, more golden paths, LLM capability extraction, radar-aware hints |
+| P3-3 | done (2026-10-09) | `dependencies` gate (MVP+): locked versions in uv.lock and package-lock.json against radar `version` constraints; a manifest without its lockfile fails |
+| P3-4 | done (2026-10-09) | `[licenses] forbidden` checked against the installed packages' metadata; a package without licence metadata is reported |
+| P3-8 | done (2026-10-09) | Three golden paths (python-fastapi, fullstack-react, python-worker) with `golden.toml` manifests, production-grade images, end-to-end checked in CI |
+| P3-9 | done (2026-10-09) | LLM capability analyst: every claim must quote the idea; keywords stay the floor (negations ignored); the stack stays compiled from the radar |
+| P3-5, P3-10 | open | Vulnerability policy (OSV), radar-aware hints before the spec |
 
 **Exit criteria:** a real-world radar (BYOR CSV with ≥ 50 entries) imports and validates; moving a tech to
 `hold` opens migration items for every affected app (test); a dependency with a known critical CVE blocks a

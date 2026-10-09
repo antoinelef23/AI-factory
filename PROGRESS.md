@@ -2,24 +2,26 @@
 
 Plan: [ROADMAP.md](ROADMAP.md). Strategy: [PLANS.md](PLANS.md). How to run: [README.md](README.md).
 
-## State (2026-10-08)
+## State (2026-10-09, after the audit hardening)
 
-**Phase 0 complete. Phase 1 core complete** (P1-1, P1-3, P1-4, P1-6).
-Published (private) on 2026-10-07: [AI-factory](https://github.com/antoinelef23/AI-factory) and
-[Claudo-portable](https://github.com/antoinelef23/Claudo-portable) (Claudo + the portability work). The original
-Claudo repo (`antoinelef23/AI-Workflow-gates`, local remote `origin`) was deliberately NOT pushed to: Claudo's local
-branch tracks `portable` and `remote.pushDefault = portable` so a plain `git push` cannot reach it.
-**CI is green** on GitHub (Windows + Ubuntu for the factory; Claudo's own gate workflow on Linux).
-The factory now builds MVP+ apps through Claudo's orchestrator and ships them with a signed human approval.
+**The 2026-10-09 audit is worked through: H1-H7 done** ([HARDENING.md](HARDENING.md)); every one of its 178
+findings has a line in [docs/audits/2026-10-09-triage.md](docs/audits/2026-10-09-triage.md) (177 fixed with a
+test, A142 deferred). The critical one is closed and verified live in the real container: the app's `.git` is
+read-only inside it, and host git runs no hook, fsmonitor or unknown config (the control with the old mount showed
+the planted hook and fsmonitor really executing on Windows).
 
-**Verification command:** `just check` (ruff check + format check + pytest). Last run (2026-10-08, local, exit
-codes checked): **536 passed, 2 skipped** (the skipped ones are the billed calibration tests, `just calibrate`).
-Pushed and green in GitHub CI on Windows and Ubuntu: `cebbbf6`. **Not pushed yet**: every commit after it (waiting
-for Antoine's go, see CORRECTIONS.md sections 0 and 4). The real-engine integration tests skip in CI.
-Claudo (`AI-Workflow-gates/_build`, separate repo): `just gate-ci` green on Windows (1084 + 202 tests) at
-`94202b4`. Three commits are **local only**, not pushed to `portable`: `b9b96c7` (nonce-bound tokens, reviewer
-reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens flagged, agent environment test).
-**Push Claudo first**: the factory relies on them and says so on the item when they are missing.
+**Verification command:** `just check` (ruff, format, pytest in parallel with 100% line and branch coverage of
+`src/factory` and `scripts/`, enforced). Last run (2026-10-09, local, exit code checked): **972 passed, 2 skipped,
+coverage 100.00%**. `scripts/golden_paths_ci.py --docker` passed here (three templates scaffolded, tested and
+built). Claudo: `just gate-ci` green (220 + 1084) at `a6d83c1`.
+
+**Pushed:** factory up to `4827d6b`, Claudo up to `ca576da` on `portable` (both CI green). **Local only, waiting
+for Antoine's go:** every factory commit after `4827d6b` (the plan `eb540f9`, then the hardening), and Claudo
+`c843e37`, `a7bd16b`, `a6d83c1`, `5ccdfd1`. Push Claudo first: the factory's sandbox labels its containers for reaping.
+
+Published (private) since 2026-10-07: [AI-factory](https://github.com/antoinelef23/AI-factory) and
+[Claudo-portable](https://github.com/antoinelef23/Claudo-portable). Claudo's `origin`
+(`antoinelef23/AI-Workflow-gates`) is never pushed to: `remote.pushDefault = portable`.
 
 ### 2026-10-09 (Opus): identity, dependency policy
 - **Known limit solved, verified identity** (`[identity] provider = "github"`, IT-owned `roles.toml`, optional
@@ -251,9 +253,13 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   machine can edit roles.toml: keep it under review like the radar.
 - Approval secret: CLOSED for sandboxed builds (2026-10-09). The agent, Claudo's verify/evals and the factory's
   gates run in a container that never receives it; measured: a test asserting the secret is absent passes in the
-  sandbox and FAILS on the host (so before this, agent-written tests run by `verify` could read it). Left: an
-  `--unsafe-host` build (IT must acknowledge it), a POV/POC built on the host when Docker is down (noted on the
-  item), and the spec/design agents, which run on the host with read-only tools.
+  sandbox and FAILS on the host (so before this, agent-written tests run by `verify` could read it). Since the
+  audit (H1), code in the container can no longer reach the host through git either (read-only `.git`, hardened
+  host git, IT-owned gate commands). Left: an `--unsafe-host` build (IT must acknowledge it), a POV/POC built on
+  the host when Docker is down (noted on the item), and the spec/design agents, which run on the host with
+  read-only tools.
+- The text-strict list (`uv`, `requests`, MongoDB's `motor`) is pinned by a test: a new ambiguous radar alias needs
+  an entry. `deploy/sandbox/lab-ws` (Claudo) is checked live only, not by a unit test.
 - Capability detection: keywords plus, since 2026-10-09, an LLM analyst whose claims must quote the idea (live:
   the live1 idea now gets its database, $0.017). The stack is still compiled from the radar.
 - Claudo's two Opus reviews dominate MVP cost (above).
@@ -273,13 +279,10 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   already have the recipe. Same class as J-5, not fixed: it would need a deliberate setup commit on the base.
 
 ## Next steps (in order)
-The 2026-10-09 audit (`docs/audits/2026-10-09-ultracode.md`, 178 findings) sets the order now: see
-[HARDENING.md](HARDENING.md). The critical one, re-checked on `main`: a sandboxed agent can write `.git` hooks or
-config, and host-side git runs them next to the signing secret (Claudo has the same pattern). Until H1 is done,
-the sandbox does NOT contain a hostile agent; it only keeps the secret out of a cooperative agent's process.
-1. **H1** trust boundary (`.git` read-only in both sandboxes, hardened host git, gate commands from IT's golden
-   path only), then H2 containment record, H3 escaping, H4 state machine. All offline and free.
-2. Antoine: decide the live item `utc-clock` (scratch live8, at IT's ship review, reviewer BLOCK made stale by the
-   targeted fix, `fixed_after_review` needs a note). Revoke the sandbox token pasted into the session.
-   Claudo ca576da was pushed to `portable` (CI green).
-3. H5-H7, then more golden paths on demand.
+1. Antoine: a go to push (Claudo `c843e37`..`5ccdfd1` to `portable` first, then the factory). CI will run
+   the new golden-paths job (docker builds) for the first time on GitHub.
+2. Antoine, billed (ask first): one sandboxed MVP smoke on the hardened code (about $2, as utc-clock was), and
+   `just calibrate` again: the calibration baseline was corrected (A73), so the recorded numbers are stale.
+3. Antoine: decide the live item `utc-clock` (scratch live8, at IT's ship review); revoke the token pasted into
+   the session. Decide A142 (roles keyed on the GitHub login, or login + account id in roles.toml).
+4. Then: more golden paths on demand, P3-5 (vulnerability policy), P3-10.

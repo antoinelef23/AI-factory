@@ -102,6 +102,22 @@ refuted/fixed/deferred line each.
   `git config core.fsmonitor` from the container fails with "Read-only file system"; the host commit that
   follows runs nothing. Control with the pre-H1 mount: both were planted, and plain host git EXECUTED both
   on Windows. The factory's allowlist then refused the planted config.
+- **H2 done.** `24cb1e3`: agent code never moves silently to the host.
+- **H3 done.** `fa6824a`: titles and ideas never become code or structure.
+- **H4 done.** `ce44ab9` (claudo_cp split), `e05b47d` (terminal states, guards), `616628b` (persistence),
+  `8ef1c5e` (drift in flight).
+- **H5 done.** `33257ad` (secrets), `98658e7` (radar detection), `a57bcbd` (unreadable inputs). The git-before-
+  gating item was done in H1 (`3fa1f9c`).
+- **H6 done.** `75a71f2`: pinned, locked, non-root images; worker consumer; `scripts/golden_paths_ci.py` run here
+  with `--docker`: the three templates pass and each image answers /health offline as uid 10001.
+- **H7 done.** `a8ea77a` (calibration harness, faithful baseline), the docs commit (README, ROADMAP, PROGRESS).
+- **Remaining lows: swept.** `9e7ee9d`, `8cb7a45`, `a1550c4`, `3ddf418`, `7738788`, `b99baf0`. Every one of the
+  178 findings has a line in [docs/audits/2026-10-09-triage.md](docs/audits/2026-10-09-triage.md): 177 fixed,
+  one deferred (A142, roles keyed on the login: a roles.toml format decision for IT).
+- **Coverage: 100% line and branch**, enforced by `just check` (`d89fb15`); the Claudo modules changed for this
+  work are at 100% too (`a6d83c1`).
+- **Not yet done (needs Antoine's go):** a billed sandboxed MVP smoke on the hardened code, and a re-run of
+  `just calibrate`, since the calibration baseline changed (A73).
 
 ## Exit criteria
 - H1-H4: each fix has a test that fails on the old code, `just check` and Claudo `just gate-ci` are green, and

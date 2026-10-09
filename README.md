@@ -53,7 +53,7 @@ Needs `uv` (and optionally `just`). Open a **new** terminal so `uv` is on PATH, 
 ```powershell
 cd C:\Users\Antoine\Projets\AI-factory
 uv sync
-just check          # verification: lint + format + tests (offline, ~5 s)
+just check          # verification: lint + format + tests, 100% line and branch coverage (offline, ~2 min)
 ```
 
 ## Test it tonight
@@ -117,10 +117,12 @@ uv run factory abandon add-csv-export --as owner --reason "no longer needed"
 
 The change works on a **branch `factory/<slug>` of the app's own git repo** and inherits the app's maturity. Its
 design is the app's *existing* stack judged by the *current* radar (a migration's design lists what to remove, and
-the build gates fail until the forbidden technology is really gone). Approval means "ready": the app folder keeps
-showing the change branch until IT merges, so `drift` marks that app *in flight* instead of judging it, but keeps
-failing while a *migration* is pending, since the violation is still there. One open change per app.
-`factory drift --open` now opens migrations that you can simply `run`.
+the build gates fail until the forbidden technology is really gone). Approval means "ready": once the change is
+built, the app folder shows its branch until IT merges, so `drift` marks that app *in flight* instead of judging
+it; a change taken in but not yet built hides nothing. `drift` keeps failing while a *migration* is pending,
+since the violation is still there. One open change per app, however its name is spelled (`./orders/` is
+`orders`). `factory drift --open` opens migrations that you `run` like any change. Exceptions IT granted on a
+change become the app's when it is merged, and only the commit IT approved is merged.
 
 ## Sandboxed builds
 
@@ -137,7 +139,21 @@ export CLAUDE_CODE_OAUTH_TOKEN=...                          # (or ANTHROPIC_API_
 
 From MVP up a build waits until the sandbox is ready; `--unsafe-host` on `run`/`approve`/`promote` builds on the
 host instead and puts an `unsafe_host` acknowledgement on the item for IT. A POV/POC falls back to the host with a
-note. Offline (`--runner offline`) nothing needs Docker. The pull request says where the agent's code ran.
+note. Offline (`--runner offline`) nothing needs Docker. The pull request says where the agent's code ran, and it
+never claims more than what happened: if the gates or Claudo's final run would run on the host after a sandboxed
+build (Docker down, or `approve --unsafe-host`), the factory refuses, or with `--unsafe-host` records the move for
+IT to acknowledge before the ship.
+
+The host never runs what the container could have planted (audit 2026-10-09, `HARDENING.md`):
+
+- Every app is a git project **before** any agent runs (its scaffold is the first commit), and its `.git` is
+  mounted **read-only** in the container: no hook or git setting can be planted there.
+- Every git command the factory runs on the host disables hooks, fsmonitor and signing, and the app's
+  `.git/config` is held to an allowlist (a filter, a credential helper, a `pushurl` or an include makes the factory
+  refuse the app until someone looks at it). A push goes only to the expected repository URL.
+- Gate commands come from IT's golden path folder, never from the copy of `golden.toml` inside the app.
+- The model credential reaches the container by name only (never in a command line), gate containers get none,
+  and a container that times out, or a whole Claudo run that is stopped, is killed with everything it started.
 
 ## Golden paths
 
@@ -151,7 +167,12 @@ those whose every technology the radar allows at the item's maturity:
 | `fullstack-react` | an idea with screens: FastAPI backend + React frontend (Vite, TypeScript) | pytest, then `npm ci` + vitest |
 | `python-worker` | an idea that consumes events: a broker-agnostic consumer loop + `GET /health` | pytest |
 
-Adding a template is a folder plus its `golden.toml`.
+Adding a template is a folder plus its `golden.toml`, whose `techs` must list every radar technology it ships (a
+test checks it: a held one then stops the template from being offered). The images are production-grade: base
+images and uv pinned by digest, dependencies installed exactly as locked (`uv sync --locked --no-dev`), a non-root
+user, no network needed at start. The worker runs its consumer next to `GET /health` once a broker adapter exists.
+The root CI scaffolds each template through the factory, then locks, lints, tests and `docker build`s it
+(`scripts/golden_paths_ci.py`). An issue title never lands raw in generated code: the code gets a sanitized copy.
 
 ## Ideas from GitHub issues
 
@@ -164,8 +185,10 @@ uv run factory inbox      # labelled issues -> work items; progress is commented
 Every open issue labelled `factory` becomes a work item (title, body as the idea, maturity from a `maturity:mvp`
 label or a `Maturity: mvp` line, default POC; the issue's author is the requester). The factory comments on the
 issue when it receives it and each time its stage changes (waiting for whose decision, blocked, delivered with the
-repository or pull request link). An issue is imported once. With identity on, only issues from accounts that hold
-the business role are taken: an issue body is untrusted text that ends up in the agents' prompts.
+repository or pull request link). An issue is imported once, even after the intake repository is renamed (it is
+recognised by its GitHub id), and an issue that is closed or loses its label parks its item once and gets no more
+comments (`factory run` resumes it). With identity on, only issues from accounts that hold the business role are
+taken: an issue body is untrusted text that ends up in the agents' prompts, so it is quoted in every document.
 
 ## Who decides: verified identity and roles
 
@@ -183,7 +206,8 @@ owner = ["dave"]
 Every checkpoint decision, merge, publish, abandon, exception and promotion checks it; `--by` can only repeat
 the verified login; approvals (and the pull request) record `verified: github`, and the signed Claudo token
 carries that name. `four_eyes = true` adds separation of duties: one person cannot decide checkpoints for two
-different roles of the same item (approve the plan as owner, then ship it as IT).
+different roles of the same item (approve the plan as owner, then ship it as IT). It needs `provider = "github"`
+(refused otherwise), and an approval recorded as self-declared cannot prove separation: it must be decided again.
 
 ## Deliver to GitHub: one private repo per app, one pull request per change
 
@@ -209,7 +233,8 @@ cost.
 Once an app is published, its changes can only be merged through their pull request: the local `factory merge` is
 refused (it would diverge from the host). `factory abandon` closes the change's open pull request and deletes its
 remote branch; a pull request already merged on the host is `factory sync`'s, not abandon's. A failed push does not
-orphan the repository: it is recorded the moment it is created, and the next `publish` reuses it.
+orphan the repository: it is recorded the moment it is created, and the next `publish` reuses it. Publishing a
+change whose pull request was closed on the host opens a new one.
 
 ## Bring your own radar
 
@@ -239,9 +264,11 @@ Exceptions are debts: those granted at a design review lapse after `[policy] exc
 `factory allow <slug> <tech> --as it --reason "..." --expires 2026-12-31` sets its own date and keeps the reason.
 Once an exception lapses, the build gate and `drift` stop sheltering its technology.
 
-`drift` re-checks every shipped app (manifests, imports, Docker images, design) against the **current** radar,
-honoring the exceptions IT granted per app. Migration items are tracked, not executed: changing an existing app is
-ROADMAP P2-6, and `run` refuses to push them through the new-app pipeline.
+`drift` re-checks every shipped app against the **current** radar from what it USES (manifests, imports, Docker
+images), never from its old design prose (which records what was approved at the time), honoring the exceptions IT
+granted per app. A shipped app whose folder is missing is reported as drift: nothing proves it still complies.
+`radar-diff` also reports changed version constraints, aliases and forbidden licences. Migration items are changes
+like any other: `run` builds them on the app's branch.
 
 ## Claudo: plan validation, audited builds, signed approvals
 
@@ -259,8 +286,10 @@ No Claudo found: the factory still runs, plans are simply not linted and everyth
 ## Spec lint (deterministic, before any human)
 
 Every spec must pass a structural lint: all seven sections, every invariant and behavior covered by an eval in the
-`Covers` column, IDs unique, and what the factory mandates (the radar invariant, `GET /health` for a new app, "no
-regression" for a change). An agent-written spec that fails is re-prompted with the errors (`[policy] spec_lint_retries`,
+`Covers` column (an ID defined in any form, not only `**INV-1**:`), IDs unique, and what the factory mandates
+in its section (the radar invariant in section 3, `GET /health` in section 4 for a new app, "no regression" for a
+change): a mention in the non-goals does not count. A spec or plan edited by hand after it was generated is
+linted again before its approval. An agent-written spec that fails is re-prompted with the errors (`[policy] spec_lint_retries`,
 default 2), then blocked. It exists because the judge below is weakest at noticing what is *missing*; it deliberately
 does not judge meaning (an invented requirement that has its own eval is structurally flawless).
 
@@ -308,8 +337,9 @@ cp1252, CRLF).
 ```
 factory.toml        factory definition (runner, models, gates per maturity, [engine])
 radar.toml          company tech radar (IT-owned)
-golden_paths/       IT project templates (python-fastapi: app, evals, justfile, CI, Dockerfile)
-src/factory/        radar, detect, guard, gates, design compiler, foreman, agents, judge, claudo bridge, cli
+golden_paths/       IT project templates (python-fastapi, fullstack-react, python-worker: app, tests, CI, Dockerfile)
+src/factory/        radar, detect, guard, gates, design compiler, foreman, agents, judge, claudo bridge, sandbox, cli
+scripts/            golden_paths_ci.py: the root CI's end-to-end check of every template
 work/<slug>/        one folder per work item: item.json + idea/spec/design/tasks/gate-report/judge-*/plan-lint
-apps/<slug>/        shipped apps (each its own git repo once built through Claudo)
+apps/<slug>/        built apps, each its own git repository from its first scaffold (both folders are git-ignored)
 ```
