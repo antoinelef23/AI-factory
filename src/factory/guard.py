@@ -42,9 +42,8 @@ def plan_radar_errors(tasks_md: str, radar: Radar, maturity: str) -> list[str]:
         if header:
             task = header.group(1)
             continue
-        if NEGATION.search(line):
-            continue
-        for tech in radar.scan_text(line):
+        used = [c for c in RADAR_CLAUSE.split(line) if not NEGATION.search(c)]
+        for tech in radar.scan_text("\n".join(used)):
             if verdict(tech, maturity) != BLOCK or (task, tech.id) in seen:
                 continue
             seen.add((task, tech.id))
@@ -71,6 +70,16 @@ SENTENCE = re.compile(r"(?<=[.!?])\s+")
 CLAUSE = re.compile(r"[;,:]|\b(?:then|and|but|that|which|calling|called|defined|declared|imported)\b", re.I)
 
 
+# For the scope check, a guardrail is a clause that forbids ("do not touch `x.py`"). Deleting, removing or
+# replacing a file IS changing it, so those verbs never exempt a clause from the check (audit A140).
+SCOPE_NEGATION = re.compile(r"\b(not|never|no|don't|dont|avoid|without)\b", re.I)
+# A plan line can mix a use and a negation ("Use Flask for the API (no auth needed)"): only the clause
+# carrying the negation is a guardrail (audit A140).
+# Split on `;`, `but` and a parenthetical remark: not on commas ("Do not add Flask, MongoDB or Requests" is
+# one guardrail), nor on a call's own parenthesis (`requests.get(url)`).
+RADAR_CLAUSE = re.compile(r";|\s\(|\)(?=\s|$)|\bbut\b", re.I)
+
+
 def _in_scope(path: str, touched: list[str]) -> bool:
     return any(
         path == t or (t.endswith("/") and path.startswith(t)) or fnmatch.fnmatch(path, t) for t in touched
@@ -95,19 +104,18 @@ def plan_scope_errors(tasks_md: str) -> list[str]:
             continue
         ft = FILES_TOUCHED.match(line)
         if ft:
-            touched = [t.strip().lstrip("./") for t in re.findall(r"`([^`]+)`", ft.group(1))]
+            # removeprefix, not lstrip: `.github/...` keeps its dot (audit A139)
+            touched = [t.strip().removeprefix("./") for t in re.findall(r"`([^`]+)`", ft.group(1))]
             continue
         if PROMPT_MARK.match(line):
             in_prompt = True
         if not in_prompt:
             continue
         for sentence in SENTENCE.split(line.lstrip(" >-*")):
-            if NEGATION.search(sentence):
-                continue
             for clause in CLAUSE.split(sentence):  # "Read `a.py`, then create `b.py`": only b.py is written
-                if not WRITE_VERB.search(clause):
+                if SCOPE_NEGATION.search(clause) or not WRITE_VERB.search(clause):
                     continue
-                for path in REPO_PATH.findall(clause):
+                for path in (p.removeprefix("./") for p in REPO_PATH.findall(clause)):
                     if (task, path) not in seen and not _in_scope(path, touched):
                         seen.add((task, path))
                         errors.append(f"{task}: the prompt changes {path} but files_touched does not list it")

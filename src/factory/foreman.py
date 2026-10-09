@@ -842,7 +842,7 @@ class Foreman:
         feedback, tries = base_feedback, 0
         while True:
             if item.kind != "app":
-                existing = self._read_app_file(item, f"work/{item.target}/spec.md")
+                existing = self._current_app_spec(item)
                 offline = offline_change_spec(item)
                 prompt = change_spec_prompt(item, feedback, existing)
             else:
@@ -876,6 +876,20 @@ class Foreman:
     def _design_report(self, item: WorkItem):
         d = self.store.dir(item.slug)
         return check_project(d, self.radar, item.maturity, docs=[d / "design.md"])
+
+    def _current_app_spec(self, item: WorkItem) -> str:
+        """The target app's spec as it stands: its original spec, then each merged change's spec, oldest
+        first (a change specced against the original alone missed what later changes added: A172)."""
+        parts = [self._read_app_file(item, f"work/{item.target}/spec.md")]
+        merged = sorted(
+            (i for i in self.store.all() if i.kind != "app" and i.target == item.target and i.merged),
+            key=lambda i: i.created,
+        )
+        for change in merged:
+            spec = self._read_app_file(item, f"work/{change.slug}/spec.md")
+            if spec.strip():
+                parts.append(f"<!-- merged change {change.slug} ({change.kind}) -->\n{spec}")
+        return "\n\n".join(p for p in parts if p.strip())
 
     def _read_app_file(self, item: WorkItem, rel: str) -> str:
         path = self.app_dir(item) / rel
@@ -1129,7 +1143,9 @@ class Foreman:
                 for p in app.rglob("*")
                 if p.is_file() and not skip & set(p.relative_to(app).parts)
             )
-            return files[:80]
+            if len(files) > 80:  # never presented as complete when it is not (A169)
+                return [*files[:80], f"(+{len(files) - 80} more files: list truncated)"]
+            return files
         gp = self._golden_path(item)
         src = self.cfg.golden_paths_dir / gp if gp else None
         if not src or not src.is_dir():

@@ -26,6 +26,8 @@ capability_analyst = true         # an LLM also reads which capabilities the ide
 max_build_attempts = 3           # build -> gate loops per `run` before a human is asked (agent runners only)
 
 [agent.models]                    # passed to `claude --model` (aliases accepted)
+# `build` and [agent] max_turns_build apply to the single build agent (below [engine] build_from, and the
+# targeted fixes after a Claudo run). Claudo's own builds use its model registry (lab/models/registry.toml).
 triage = "sonnet"                 # capability analyst (P3-9): one small call per idea
 spec = "sonnet"
 plan = "sonnet"

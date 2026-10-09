@@ -350,7 +350,7 @@ Claudo appends one row per node below (date, node, agent, result). It is bookkee
 def with_run_log(tasks_md: str) -> str:
     """End the plan with its own `## Run log` table, where Claudo appends its rows. Without it they land
     directly under the last block (the checkpoint) and read as part of it. Idempotent."""
-    if "## Run log" in tasks_md:
+    if re.search(r"(?m)^## Run log\s*$", tasks_md):  # the heading itself, not a mention of it (A171)
         return tasks_md
     return tasks_md.rstrip("\n") + "\n" + RUN_LOG_HEADING
 
@@ -397,7 +397,8 @@ design: ./design.md      # version: 0.1.0
 def change_spec_prompt(item: WorkItem, feedback: str, existing_spec: str) -> str:
     fb = f"\nThe business rejected the previous draft. Their feedback:\n{feedback}\n" if feedback else ""
     known = (
-        "\nThe app's EXISTING spec (context only: do not restate it):\n"
+        "\nThe app's EXISTING spec, then the specs of the changes merged since (context only: do not "
+        "restate it):\n"
         f"<existing-spec>\n{existing_spec.strip()}\n</existing-spec>\n"
         if existing_spec.strip()
         else "\n(The app has no recorded spec: infer nothing about it beyond what idea.md says.)\n"
@@ -425,6 +426,18 @@ Sections: 1. Intent (+ Target KPI), 2. Glossary, 3. Invariants, 4. Behaviors (Gi
 """
 
 
+def _change_stack_rules(item: WorkItem) -> str:
+    """A migration must add the replacement its design names; any other change adds nothing (A173: the two
+    rules used to be given together, so a migration was told both to switch and never to add)."""
+    if item.kind == "migration":
+        return (
+            "- Use ONLY the technologies of design.md section 2, plus the replacement design.md names\n"
+            "  for each technology to migrate away from: add that replacement, then remove the old one from\n"
+            "  the manifests and the code. Add no other dependency."
+        )
+    return "- Use ONLY the technologies of design.md section 2. Never add a dependency."
+
+
 def change_build_prompt(item: WorkItem, forbidden: list[str], feedback: str) -> str:
     fb = f"\nA previous attempt failed the factory gates. Fix these first:\n{feedback}\n" if feedback else ""
     return f"""You are the implementer of a governed AI software factory.
@@ -434,10 +447,8 @@ they describe.
 
 HARD RULES (enforced by gates after you finish; violations block shipping):
 - Make the MINIMAL change: the existing behavior and every existing test must keep working.
-- Use ONLY the technologies of design.md section 2. Never add a dependency.
+{_change_stack_rules(item)}
 - Forbidden at maturity `{item.maturity}`: {", ".join(forbidden) or "none"}.
-- If design.md lists technologies to migrate away from, replace each one and remove it from the manifests
-  and the code, using the alternative it names.
 - No secrets in code; configuration from environment variables.
 - Write pytest tests for the change and run `uv run pytest -q` until green.
 - Never edit files under work/ (the spec is immutable during the build).{fb}

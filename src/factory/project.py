@@ -144,7 +144,7 @@ def check_git_dir(app: Path) -> None:
     _checked_configs.add(key)
 
 
-def run_git(app: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def run_git(app: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """The one way the factory runs git in an app (hardened argv, allowlisted .git/config, timeout)."""
     check_git_dir(app)
     try:
@@ -155,23 +155,23 @@ def run_git(app: Path, *args: str) -> subprocess.CompletedProcess[str]:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=git_env(),
+            env={**git_env(), **(env or {})},
             timeout=GIT_TIMEOUT,
         )
     except subprocess.TimeoutExpired as e:
         raise ProjectError(f"git {' '.join(args)} timed out after {GIT_TIMEOUT}s in {app}") from e
 
 
-def _git_raw(app: Path, *args: str) -> str:
+def _git_raw(app: Path, *args: str, env: dict[str, str] | None = None) -> str:
     """git's stdout exactly as printed: `status --porcelain` lines start with a significant space."""
-    p = run_git(app, *args)
+    p = run_git(app, *args, env=env)
     if p.returncode != 0:
         raise ProjectError(f"git {' '.join(args)} failed in {app}: {(p.stderr or p.stdout).strip()[-300:]}")
     return p.stdout
 
 
-def _git(app: Path, *args: str) -> str:
-    return _git_raw(app, *args).strip()
+def _git(app: Path, *args: str, env: dict[str, str] | None = None) -> str:
+    return _git_raw(app, *args, env=env).strip()
 
 
 def has_recipe(justfile: Path, name: str) -> bool:
@@ -241,8 +241,14 @@ def _untrack_runtime_state(app: Path) -> bool:
     ]
     if not tracked:
         return False
+    # Committed from a scratch index holding HEAD minus these files: anything the operator had staged stays
+    # staged, out of this commit (A153). The real index then drops them too.
+    with tempfile.TemporaryDirectory(prefix="factory-index-") as tmp:
+        scratch = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        _git(app, "read-tree", "HEAD", env=scratch)
+        _git(app, "rm", "-q", "--cached", "--", *tracked, env=scratch)
+        _git(app, "commit", "-q", "-m", UNTRACK_RUNTIME_COMMIT, env=scratch)
     _git(app, "rm", "-q", "--cached", "--", *tracked)
-    _git(app, "commit", "-q", "-m", UNTRACK_RUNTIME_COMMIT)  # the index holds only these removals
     return True
 
 
@@ -341,6 +347,12 @@ Run: auto
 """
 
 
+def config_get(app: Path, key: str) -> str:
+    """A git config value of the app, "" when it is not set (`git config --get` exits 1 then: A154)."""
+    p = run_git(app, "config", "--get", key)
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
 def current_branch(app: Path) -> str:
     return _git(app, "rev-parse", "--abbrev-ref", "HEAD")
 
@@ -357,11 +369,13 @@ def begin_change(app: Path, slug: str) -> tuple[str, str]:
     prepare_project(app)  # a git repo with a local identity and at least one commit
     branch = f"factory/{slug}"
     if branch_exists(app, branch):
-        base = _git(app, "config", "--get", f"branch.{branch}.factory-base") or "main"
+        base = config_get(app, f"branch.{branch}.factory-base") or "main"
         _git(app, "switch", "-q", branch)
         reference = base if branch_exists(app, base) else "HEAD"
         return base, _git(app, "merge-base", reference, branch)
     base = current_branch(app)
+    if base == "HEAD":  # a detached checkout: there would be no branch to merge back into (A155)
+        raise ProjectError(f"{app} is on a detached HEAD: check out its base branch before starting a change")
     if base.startswith("factory/"):
         raise ProjectError(f"the app is on {base}: finish or merge that change before starting another")
     if porcelain(app):
@@ -379,7 +393,7 @@ def merge_fast_forward(app: Path, slug: str) -> str:
     branch = f"factory/{slug}"
     if not branch_exists(app, branch):
         raise ProjectError(f"no branch {branch} in {app}")
-    base = _git(app, "config", "--get", f"branch.{branch}.factory-base") or "main"
+    base = config_get(app, f"branch.{branch}.factory-base") or "main"
     if porcelain(app):
         raise ProjectError(f"{app} has uncommitted changes: commit or discard them before merging")
     _git(app, "switch", "-q", base)
@@ -419,7 +433,7 @@ def abandon_change(app: Path, slug: str) -> None:
         return
     if porcelain(app):
         raise ProjectError(f"{app} has uncommitted changes: commit or discard them before abandoning")
-    base = _git(app, "config", "--get", f"branch.{branch}.factory-base") or "main"
+    base = config_get(app, f"branch.{branch}.factory-base") or "main"
     if current_branch(app) == branch:
         _git(app, "switch", "-q", base)
     _git(app, "branch", "-q", "-D", branch)
