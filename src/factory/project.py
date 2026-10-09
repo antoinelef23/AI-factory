@@ -509,18 +509,25 @@ def rev_parse(app: Path, ref: str) -> str:
     return _git(app, "rev-parse", ref)
 
 
+# Test files in every ecosystem the golden paths use: tests/ and __tests__/ folders, test_*.py / *_test.py,
+# *.test.ts(x) / *.spec.js... (audit A64: only tests/ was watched, so a rewritten web test went unflagged).
+TEST_PATH = re.compile(
+    r"(^|/)(tests?|__tests__)/|(^|/)test_[^/]*\.py$|_test\.py$|\.(test|spec)\.[cm]?[jt]sx?$"
+)
+
+
 def modified_tests(app: Path, base_sha: str) -> list[str]:
-    """Existing test files (tests/) a change modified, renamed or deleted since `base_sha`, as `path (how)`.
+    """Existing test files a change modified, renamed or deleted since `base_sha`, as `path (how)`.
 
     Adding tests is what a change should do; rewriting the ones that were there can hide a regression."""
     try:
-        out = _git(app, "diff", "--name-status", "-M", base_sha, "HEAD", "--", "tests")
+        out = _git(app, "diff", "--name-status", "-M", base_sha, "HEAD")
     except ProjectError:
         return []
     changed: list[str] = []
     for line in out.splitlines():
         parts = line.split("\t")
-        if len(parts) >= 2 and parts[0][:1] in "MDRT":
+        if len(parts) >= 2 and parts[0][:1] in "MDRT" and TEST_PATH.search(parts[1]):
             changed.append(f"{parts[1]} ({'deleted' if parts[0][:1] == 'D' else 'modified'})")
     return changed
 

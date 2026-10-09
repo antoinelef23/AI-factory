@@ -21,9 +21,14 @@ class Claudo(ScriptedClaudo):
     def review_verdict(self, project, slug, cp):  # read the report like the real bridge does
         return ClaudoEngine.review_verdict(project, slug, cp)
 
+    def sign_approval(self, *args, **kw):
+        super().sign_approval(*args, **kw)
+        self.final_next = True  # the run after a signed approval is the final one
+
     def run_build(self, slug, project, *, stop_at_checkpoint=True, **kw):
+        final, self.final_next = getattr(self, "final_next", False), False
         report = project / REPORT
-        if stop_at_checkpoint:
+        if not final:
             report.parent.mkdir(parents=True, exist_ok=True)
             report.write_text(f"# Review CP-1: aggregated verdict: {self.verdict}\n", encoding="utf-8")
         elif self.after_approval:

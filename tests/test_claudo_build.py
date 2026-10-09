@@ -139,7 +139,9 @@ def test_it_approval_signs_with_the_approvers_name_and_lets_claudo_finish(forema
     [sig] = engine.signed
     assert sig["cp"] == "CP-1" and sig["author"] == "bob"
     assert sig["secret"] == engine.runs[0]["env"]["LAB_APPROVAL_SECRET"]  # same secret Claudo verifies with
-    assert engine.runs[1]["stop"] is False  # this run is allowed to pass the checkpoint
+    # Claudo honours the token before announcing any wait, so the final run may stop at a "waiting" line: that
+    # can only be a refused token or the plan's NEXT checkpoint, never an hour of polling (audit A13).
+    assert engine.runs[1]["stop"] is True
     assert "all green" in foreman.store.read(item, "claudo-final.log")
 
 

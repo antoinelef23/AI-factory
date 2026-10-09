@@ -227,16 +227,19 @@ def plan_prompt(
         if change_of
         else "THE APP IS ALREADY SCAFFOLDED from the golden path before any task runs."
     )
+    # A new app's design has its stack in section 3; a change's design keeps the app's stack in section 2
+    # (its section 3 is "Needs IT approval": audit A66).
+    stack = "design.md section 2 (the existing stack, kept)" if change_of else "design.md section 3"
     return f"""You are the planner of a governed AI software factory.
 Read spec.md and design.md in the current directory. Write tasks.md: the execution plan.
 {where}{files}
 Never plan a scaffolding/setup task and never ask to recreate, empty or replace those files: a task that
 does so only burns time and breaks working code. T1 already starts from a running app.
-Rules: small tasks; tests before code; use ONLY the stack in design.md section 3; every BHV and INV of
+Rules: small tasks; tests before code; use ONLY the stack in {stack}; every BHV and INV of
 the spec is implemented by some task. Each task that changes app code also owns its tests: list
 `tests/` in files_touched, and write each EVAL it implements as a test named `test_eval_<n>_...`
 marked `@pytest.mark.eval` (the merge gate runs only those). An eval that checks dependencies must
-allow the golden path dependencies listed in design.md section 3, not only the stack table.{ids}{fb}
+allow the golden path dependencies listed in {stack}, not only the stack table.{ids}{fb}
 {PLAN_FORMAT}
 Output ONLY the markdown of tasks.md (feature: {item.slug}), no commentary, no code fence.
 """

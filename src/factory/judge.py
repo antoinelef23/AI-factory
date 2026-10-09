@@ -14,6 +14,7 @@ and (b) feed telemetry / model arbitration. Its safeguards against judge halluci
 from __future__ import annotations
 
 import json
+import math
 import re
 import statistics
 from dataclasses import asdict, dataclass, field
@@ -151,16 +152,35 @@ def is_grounded(quote: str, haystack: str) -> bool:
 ABSENT_PREFIX = "absent:"
 
 
-def absence_holds(quote: str, score: int, haystack: str) -> bool:
+# What an ABSENT claim may name: the parts of an artifact (a made-up name would otherwise ground any low
+# score simply by not occurring: audit A145, A146).
+ABSENT_VOCABULARY = {
+    "intent", "kpi", "target kpi", "glossary", "invariants", "behaviors", "behaviours", "examples",
+    "non-goals", "evals", "tasks", "depends_on", "files_touched", "verify", "checkpoint", "tests",
+}  # fmt: skip
+
+
+def _section_empty(artifact: str, element: str) -> bool:
+    """A `## n. <Element>` heading whose section holds nothing but blank lines."""
+    found = re.search(
+        rf"(?ims)^##\s+\d*\.?\s*{re.escape(element)}\b[^\n]*\n(.*?)(?=^##\s|\Z)", artifact + "\n"
+    )
+    return bool(found) and not found.group(1).strip()
+
+
+def absence_holds(quote: str, score: int, haystack: str, artifact: str = "") -> bool:
     """`ABSENT: <element>` grounds a LOW score for something missing entirely: nothing can be quoted from a
     section that does not exist, so without this an evals table removed outright left the criterion
-    unscored (calibration 2026-10-09). It holds only when the named element really does not occur in the
-    artifact (normalised) and the score is 1 or 2: a false absence claim is discarded like a made-up quote."""
+    unscored (calibration 2026-10-09). It holds only for a known part of an artifact, scored 1 or 2, that
+    really does not occur (normalised), or whose heading is left with nothing under it: a false absence claim
+    is discarded like a made-up quote."""
     text = _norm(quote)
     if not text.startswith(ABSENT_PREFIX) or score > 2:
         return False
-    element = text[len(ABSENT_PREFIX) :].strip()
-    return len(element) >= 4 and element not in haystack
+    element = re.sub(r"\s+(table|section)$", "", text[len(ABSENT_PREFIX) :].strip())
+    if element not in ABSENT_VOCABULARY:
+        return False
+    return element not in haystack or _section_empty(artifact, element)
 
 
 def build_prompt(kind: str, artifact: str, idea: str, extra: str = "") -> str:
@@ -228,11 +248,15 @@ def evaluate(kind: str, raw: str, artifact: str) -> JudgeReport:
     wanted = {cid for cid, _ in RUBRICS[kind]}
     haystack = _norm(artifact)
     seen: set[str] = set()
-    for raw_c in data.get("criteria", []):
+    criteria = data.get("criteria")
+    if not isinstance(criteria, list):
+        report.problems.append("judge answer has no criteria list")
+        criteria = []
+    for raw_c in criteria:
         if not isinstance(raw_c, dict):
             continue
         cid, score = raw_c.get("id"), raw_c.get("score")
-        if cid not in wanted or cid in seen:
+        if not isinstance(cid, str) or cid not in wanted or cid in seen:
             report.problems.append(f"unexpected or duplicate criterion {cid!r}")
             continue
         if not isinstance(score, int) or isinstance(score, bool) or not 1 <= score <= 5:
@@ -240,7 +264,7 @@ def evaluate(kind: str, raw: str, artifact: str) -> JudgeReport:
             continue
         seen.add(cid)
         quote = str(raw_c.get("quote", "")).strip()
-        grounded = is_grounded(quote, haystack) or absence_holds(quote, score, haystack)
+        grounded = is_grounded(quote, haystack) or absence_holds(quote, score, haystack, artifact)
         if not grounded:
             report.problems.append(f"{cid}: quote not found verbatim in the artifact (score ignored)")
         report.criteria.append(
@@ -313,8 +337,9 @@ def combine(kind: str, reports: list[JudgeReport]) -> JudgeReport:
         scored = [(c.score, c) for r in reliable for c in r.criteria if c.id == cid and c.grounded]
         if not scored:
             continue
-        median = statistics.median_low(sorted(score for score, _ in scored))
-        chosen = next(c for score, c in scored if score == median)
+        # Half up: with two runs at 3 and 5 the criterion is 4, never the minimum of the two (audit A147).
+        median = math.floor(statistics.median(score for score, _ in scored) + 0.5)
+        chosen = min(scored, key=lambda sc: abs(sc[0] - median))[1]
         votes = ", ".join(str(score) for score, _ in scored)
         out.criteria.append(
             CriterionScore(cid, median, f"{chosen.evidence} (scores: {votes})", chosen.quote, True)
@@ -322,6 +347,7 @@ def combine(kind: str, reports: list[JudgeReport]) -> JudgeReport:
     if len(out.criteria) * 2 <= len(RUBRICS[kind]):
         out.verdict = "unreliable"
         out.summary = "too few criteria were scored with a grounded quote across the runs"
+        out.raw = next((r.raw for r in reports if r.raw), "")  # kept for diagnosis (audit A148)
         return out
     out.verdict, out.average = compute_verdict([c.score for c in out.criteria])
     agreeing = [r for r in reliable if r.verdict == out.verdict] or reliable

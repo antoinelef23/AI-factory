@@ -317,10 +317,24 @@ def migrate_legacy_secret(root: Path) -> bool:
         return False
     target = secret_path(root)
     if not (target.is_file() and target.read_text(encoding="utf-8").strip()):
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+        _write_private(target, legacy.read_text(encoding="utf-8"))
     legacy.unlink()
     return True
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Create `path` readable by this user only from its first byte (0600, in a 0700 directory), never
+    world-readable for a moment under the default umask (audit A14, A15). On Windows the user profile's ACLs
+    apply."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.chmod(0o700)
+    except OSError:  # pragma: no cover - a directory we cannot chmod (not ours): the file is still 0600
+        pass
+    path.unlink(missing_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
 
 
 def load_or_create_secret(path: Path) -> str:
@@ -329,13 +343,8 @@ def load_or_create_secret(path: Path) -> str:
     agent running arbitrary code as this user could still read it (Claudo's residual M4: sandbox only)."""
     if path.is_file() and path.read_text(encoding="utf-8").strip():
         return path.read_text(encoding="utf-8").strip()
-    path.parent.mkdir(parents=True, exist_ok=True)
     secret = secrets.token_hex(32)
-    path.write_text(secret + "\n", encoding="utf-8", newline="\n")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass  # Windows: ACLs of the user profile apply
+    _write_private(path, secret + "\n")
     return secret
 
 

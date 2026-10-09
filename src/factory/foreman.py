@@ -530,6 +530,15 @@ class Foreman:
                 item.feedback, item.status = detail, "waiting"
                 self.store.save(item)
                 return item
+            if outcome == "next":  # IT's approval stands; the plan's next part is gated, then decided
+                item.approvals.append(
+                    {"stage": item.stage, "role": role, "by": by or role, "note": note, "verified": verified}
+                )
+                item.log("approved", f"{role} {by}".strip() + (f": {note}" if note else ""))
+                item.log("checkpoint", detail[:600])
+                item.stage, item.status = "gate", "active"
+                item.feedback = item.rejection = ""
+                return self.run(item)
         elif item.stage == "ship_review":
             self._seal_approved_head(item)
             item.claudo_cp, item.claudo_cp_consumed = "", False  # a re-decision approved: Claudo is done
@@ -1759,11 +1768,31 @@ class Foreman:
             self.engine.sign_approval(app, item.slug, item.claudo_cp, by, secret, nonce=item.approval_nonce)
         except EngineError as e:
             return "blocked", str(e)
-        res = self._run_claudo(item, app, stop_at_checkpoint=False)
+        # Claudo honours a token on disk BEFORE it announces a wait, so a "waiting" line in this run means it
+        # refused the token, or the plan reached its next checkpoint: never an hour of polling (audit A13).
+        signed = item.claudo_cp
+        res = self._run_claudo(item, app, stop_at_checkpoint=True)
         self.store.write(item, "claudo-final.log", res.log[-30000:])
         self._add_claudo_cost(item, app)
         if res.ok:
             self._commit_leftovers(item, app)
+        if res.outcome == "checkpoint" and res.checkpoint == signed:
+            return "blocked", (
+                f"Claudo did not accept the signed approval of {signed} and is waiting at it again "
+                "(signature or nonce mismatch: see checkpoint_forgery_rejected in its journal)"
+            )
+        if res.outcome == "checkpoint":
+            item.claudo_cp, item.claudo_cp_consumed = res.checkpoint, False
+            item.approval_nonce = secrets.token_hex(16)  # the next round's token
+            review = self.engine.review_verdict(app, item.slug, res.checkpoint)
+            item.claudo_review = (
+                {"cp": res.checkpoint, "verdict": review[0], "report": review[1]} if review else {}
+            )
+            item.gated_sha = ""
+            return "next", (
+                f"Claudo passed {signed} and paused at {res.checkpoint}: the new work goes through the "
+                f"gates, then IT decides {res.checkpoint}"
+            )
         if res.outcome != "done":
             return "blocked", f"Claudo did not complete after approval ({res.outcome}):\n{res.log[-2500:]}"
         # Claudo has passed its checkpoint. If the ship is blocked or IT must decide again, a rejection has to
