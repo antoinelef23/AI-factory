@@ -14,53 +14,57 @@ from factory.policy import check_dependencies
 from factory.project import ProjectError, run_git
 from factory.radar import Radar
 
+# A credential-looking name: DB_PASSWORD, client_secret, SECRET_KEY, "password", GITHUB_TOKEN, api-key...
+_CREDENTIAL_NAME = r"[A-Za-z0-9_.-]*(?:password|passwd|secret|api[_-]?key|apikey|token)(?:_?key)?"
+# A value that is a reference, not a secret: ${VAR}, {{ template }}, <placeholder>, %(name)s.
+_REFERENCE = r"(?![$<{%])"
+
 SECRET_PATTERNS = [
     ("private key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")),
     ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("Anthropic API key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}")),
-    ("generic API key", re.compile(r"\bsk-[A-Za-z0-9]{32,}\b")),
+    # OpenAI project / service-account / admin keys carry a second dash (audit A54).
+    ("generic API key", re.compile(r"\bsk-(?!ant-)(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{32,}")),
     ("GitHub token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b")),
     ("GitHub fine-grained token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{60,}")),
     ("Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
     ("Stripe live key", re.compile(r"\b[rs]k_live_[0-9a-zA-Z]{24,}\b")),
-    (
+    (  # quoted, in any file: DB_PASSWORD = "...", "password": "...", SECRET_KEY='...' (audit A55)
         "hardcoded credential",
-        re.compile(r"(?i)\b(?:password|passwd|secret|api_key|apikey|token)\s*[:=]\s*['\"][^'\"\s]{8,}['\"]"),
+        re.compile(rf"(?i)\b{_CREDENTIAL_NAME}['\"]?\s*[:=]\s*['\"]{_REFERENCE}[^'\"\s]{{8,}}['\"]"),
     ),
 ]
-TEXT_SUFFIXES = {
-    ".py",
-    ".js",
-    ".ts",
-    ".tsx",
-    ".jsx",
-    ".json",
-    ".toml",
-    ".yml",
-    ".yaml",
-    ".env",
-    ".cfg",
-    ".ini",
-    ".md",
-    ".sh",
-    ".bash",
-    ".ps1",
-    ".txt",
-    ".pem",
-    ".key",
-    ".crt",
-    ".conf",
-    ".properties",
-    ".xml",
-    ".html",
-    ".ipynb",
-    ".sql",
-    ".tf",
-    ".tfvars",
-}
-# Files that carry secrets whatever their extension.
-SECRET_FILE_PREFIXES = ("dockerfile", ".env", ".npmrc", ".pypirc", "id_rsa", "id_ed25519", "id_ecdsa")
+# Unquoted `NAME=value` lines: only in env-style files, where that is how a value is written.
+ENV_SECRET_PATTERNS = [
+    (
+        "hardcoded credential",
+        re.compile(
+            rf"(?im)^\s*(?:export\s+)?{_CREDENTIAL_NAME}\s*[=:]\s*{_REFERENCE}(?!['\"])[^\s#'\"]{{8,}}"
+        ),
+    ),
+]
+ENV_STYLE_SUFFIXES = {".env", ".properties", ".ini", ".cfg", ".conf"}
+
+
+def secret_patterns_for(name: str) -> list[tuple[str, re.Pattern]]:
+    """The patterns that apply to a file named `name` (its base name or path)."""
+    base = name.rsplit("/", 1)[-1].lower()
+    env_style = base.startswith(".env") or any(base.endswith(s) for s in ENV_STYLE_SUFFIXES)
+    return SECRET_PATTERNS + (ENV_SECRET_PATTERNS if env_style else [])
+
+
+def read_text_file(path: Path) -> str | None:
+    """A file's text whatever its extension or encoding; None for a binary (NUL byte) or unreadable file.
+    Scanning by sniffing, not by an extension allowlist, and never skipping a non-UTF-8 file (A56, A57)."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if b"\0" in data[:8192]:
+        return None
+    return data.decode("utf-8", errors="replace")
+
 
 # (command, cwd) -> (returncode, combined output). Injectable for tests.
 Executor = Callable[[str, Path], tuple[int, str]]
@@ -92,16 +96,12 @@ class GateResult:
 
 def secrets_gate(app_dir: Path) -> GateResult:
     hits: list[str] = []
-    for path in iter_files(app_dir):
-        if path.suffix.lower() not in TEXT_SUFFIXES and not path.name.lower().startswith(
-            SECRET_FILE_PREFIXES
-        ):
+    # Everything that will be published, vendored code included (audit A101).
+    for path in iter_files(app_dir, include_dependencies=True):
+        text = read_text_file(path)
+        if text is None:
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-        for label, pat in SECRET_PATTERNS:
+        for label, pat in secret_patterns_for(path.name):
             for m in pat.finditer(text):
                 line = text.count("\n", 0, m.start()) + 1
                 hits.append(f"{path.relative_to(app_dir).as_posix()}:{line}: {label}")
@@ -204,9 +204,9 @@ def secrets_in_history(app_dir: Path, rev_range: str) -> list[str]:
         elif line.startswith("@@"):
             in_header = False
         elif not in_header and line.startswith("+") and sha:
-            for label, pat in SECRET_PATTERNS:
+            for label, pat in secret_patterns_for(path):
                 key = (path, label, line[1:].strip())
-                if pat.search(line) and key not in seen:
+                if pat.search(line[1:]) and key not in seen:
                     seen.add(key)
                     hits.append(f"{sha}:{path}: {label}")
     return hits

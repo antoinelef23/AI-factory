@@ -62,16 +62,21 @@ def _git_files(root: Path, *flags: str) -> list[str] | None:
     return [n for n in p.stdout.split("\0") if n] if p.returncode == 0 else None
 
 
-def iter_files(root: Path) -> Iterator[Path]:
+def iter_files(root: Path, *, include_dependencies: bool = False) -> Iterator[Path]:
     """The files a scan must judge. In a git project: everything git TRACKS (that is what gets published,
-    whatever its folder is called) plus untracked files git would not ignore, minus junk folders.
+    whatever its folder is called) plus untracked files git would not ignore, minus junk folders. Tracked
+    third-party folders are skipped unless `include_dependencies` (the secrets gate: they are published too).
     Otherwise: a plain walk."""
     if (root / ".git").exists():
         tracked = _git_files(root, "-c")
         untracked = _git_files(root, "-o", "--exclude-standard")
         if tracked is not None and untracked is not None:
             junk_free = [n for n in untracked if not any(part in SKIP_DIRS for part in Path(n).parts)]
-            own = [n for n in tracked if not any(part in DEPENDENCY_DIRS for part in Path(n).parts)]
+            own = [
+                n
+                for n in tracked
+                if include_dependencies or not any(part in DEPENDENCY_DIRS for part in Path(n).parts)
+            ]
             for name in sorted(set(own) | set(junk_free)):
                 if (root / name).is_file():
                     yield root / name
