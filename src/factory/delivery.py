@@ -54,6 +54,10 @@ class GitHost(Protocol):
         ...
 
 
+# How many open labelled issues one `factory inbox` reads; reaching it is reported (audit A94).
+ISSUE_LIMIT = 1000
+
+
 class GhCli:
     """GitHub through the `gh` CLI (already authenticated on this machine)."""
 
@@ -107,14 +111,18 @@ class GhCli:
         )  # fmt: skip
 
     def pull_request_state(self, url: str) -> str:
-        return json.loads(self._run("pr", "view", url, "--json", "state"))["state"]
+        out = self._run("pr", "view", url, "--json", "state")
+        try:
+            return str(json.loads(out)["state"])
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            raise DeliveryError(f"gh pr view: unreadable answer: {out[:200]}") from e
 
     def close_pull_request(self, url: str, comment: str) -> None:
         self._run("pr", "close", url, "--comment", comment, "--delete-branch")
 
     def list_issues(self, repo: str, label: str) -> list[dict]:
         out = self._run(
-            "issue", "list", "--repo", repo, "--label", label, "--state", "open", "--limit", "100",
+            "issue", "list", "--repo", repo, "--label", label, "--state", "open", "--limit", str(ISSUE_LIMIT),
             "--json", "number,title,body,author,url,labels",
         )  # fmt: skip
         try:

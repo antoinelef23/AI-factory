@@ -39,9 +39,12 @@ def _foreman(root: Path, with_tests: bool) -> Foreman:
 def run_demo(source: Path, say: Say = print, with_tests: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="factory-demo-") as tmp:
         root = Path(tmp)
-        for name in ("factory.toml", "radar.toml"):
-            shutil.copy2(source / name, root / name)
-        shutil.copytree(source / "golden_paths", root / "golden_paths")
+        src_cfg = load_config(source)  # the radar and golden paths factory.toml names, wherever they are
+        shutil.copy2(source / "factory.toml", root / "factory.toml")
+        radar = root / src_cfg.radar_path.relative_to(source)
+        radar.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_cfg.radar_path, radar)
+        shutil.copytree(src_cfg.golden_paths_dir, root / src_cfg.golden_paths_dir.relative_to(source))
         f = _foreman(root, with_tests)
 
         def step(title: str) -> None:

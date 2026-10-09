@@ -65,15 +65,19 @@ def claude_argv(
     return argv
 
 
+def timeout_error(seconds: int) -> str:
+    """A call killed at its timeout consumed tokens nobody reported: not $0 but unknown (audit A85)."""
+    return f"claude timed out after {seconds}s (its cost is unknown: not counted in the item's spend)"
+
+
 def parse_claude_json(returncode: int, stdout: str, stderr: str) -> AgentResult:
     try:
         data = json.loads(stdout)
     except (json.JSONDecodeError, TypeError):
         data = None
-    if not isinstance(data, dict):
-        if returncode != 0:
-            return AgentResult(False, stdout, 0.0, (stderr or stdout)[-2000:])
-        return AgentResult(True, stdout)
+    if not isinstance(data, dict):  # claude runs with --output-format json: no JSON means no run (A84)
+        why = (stderr or stdout)[-2000:] if returncode != 0 else "the agent printed no JSON result"
+        return AgentResult(False, stdout, 0.0, why or f"exit code {returncode}")
     cost = float(data.get("total_cost_usd") or 0.0)
     text = data.get("result") or ""
     if returncode != 0 or data.get("is_error"):
@@ -126,7 +130,7 @@ class ClaudeRunner:
                 else {**os.environ, "MAX_THINKING_TOKENS": str(thinking_tokens)},
             )
         except subprocess.TimeoutExpired:
-            return AgentResult(False, "", 0.0, f"claude timed out after {self.timeout}s")
+            return AgentResult(False, "", 0.0, timeout_error(self.timeout))
         return parse_claude_json(p.returncode, p.stdout, p.stderr)
 
 

@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from factory.agents import AgentResult, claude_argv, parse_claude_json
+from factory.agents import AgentResult, claude_argv, parse_claude_json, timeout_error
 
 # The agent's own model credential (distinct from the approval secret, which never enters the container).
 CREDENTIALS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
@@ -225,6 +225,8 @@ class SandboxedRunner:
         rc, out, err = self.sandbox.run_contained(
             self.sandbox.argv(cwd, command, extra, name=name), name, self.timeout, input_text=prompt
         )
-        if rc in (124, 127) and not out:
+        if rc == 124 and not out:
+            return AgentResult(False, "", 0.0, f"sandboxed {timeout_error(self.timeout)}; {err}")
+        if rc == 127 and not out:
             return AgentResult(False, "", 0.0, f"sandboxed claude: {err}")
         return parse_claude_json(rc, out, err)

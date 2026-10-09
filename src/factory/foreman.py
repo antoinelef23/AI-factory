@@ -27,7 +27,7 @@ from factory.claudo import (
     secret_path,
 )
 from factory.config import Config
-from factory.delivery import DeliveryError, GitHost
+from factory.delivery import ISSUE_LIMIT, DeliveryError, GitHost
 from factory.design import (
     CHANGE_KINDS,
     OPTIONAL_CAPABILITIES,
@@ -209,6 +209,10 @@ class Foreman:
             issues = host.list_issues(self.cfg.intake_repo, self.cfg.intake_label)
         except DeliveryError as e:
             raise FactoryError(str(e)) from e
+        if len(issues) >= ISSUE_LIMIT:
+            skipped.append(
+                f"{ISSUE_LIMIT} or more open issues: only the first {ISSUE_LIMIT} were read this time"
+            )
         for issue in sorted(issues, key=lambda i: i["number"]):
             if issue["url"] in known:
                 continue
@@ -404,6 +408,8 @@ class Foreman:
                 item.feedback = ""  # that failure is resolved: never fed to a later stage as if current
             else:
                 item.feedback = detail
+                if step.name == "gate":  # logged under "gate" (A136); the next build gets the report
+                    item.stage = "build"
                 # Only an agent can act on the gate report; offline, a retry would fail identically.
                 if (
                     step.name == "gate"
@@ -496,6 +502,11 @@ class Foreman:
             self._mark_plan_approved(item, by)
             self._record_hash(item, "tasks.md")  # the plan, frozen at its approval (run-log rows excluded)
         if item.stage == "ship_review" and item.claudo_cp and not item.claudo_cp_consumed:
+            if self.engine is None:
+                raise FactoryError(
+                    f"'{item.slug}' is paused at Claudo's checkpoint {item.claudo_cp}: run the approval with "
+                    "Claudo available (--claudo PATH or CLAUDO_HOME) so it can finish the plan"
+                )
             refusal = self._still_contained(item, "Claudo's final run", need_credential=True)
             if refusal:
                 raise FactoryError(refusal)
@@ -1914,8 +1925,7 @@ class Foreman:
                     item, "tests_modified", f"{listed}: existing tests were rewritten, not just added to"
                 )
         failed = [r for r in results if not r.ok]
-        if failed:
-            item.stage = "build"  # the next build gets this detail as feedback
+        if failed:  # the run loop logs this at the gate, then sends the item back to build
             detail = "\n\n".join(f"[{r.name}] {r.detail}" for r in failed)
             return False, "gates failed:\n" + detail[-3000:]
         item.gated_sha = head_sha(app)

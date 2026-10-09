@@ -194,22 +194,26 @@ class ClaudoEngine:
         """Write the HMAC-signed approval token the orchestrator waits for (Claudo's approvals.py, the same
         code path as its approve.sh). The secret is passed to this one process only."""
         feature = project / "work" / slug
-        p = subprocess.run(
-            [
-                self.python,
-                str(self.home / "lab" / "engine" / "approvals.py"),
-                "sign",
-                cp,
-                str(feature),
-                author,
-                *(["--nonce", nonce] if nonce else []),
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env={**os.environ, "LAB_APPROVAL_SECRET": secret, "PYTHONUTF8": "1"},
-        )
+        try:
+            p = subprocess.run(
+                [
+                    self.python,
+                    str(self.home / "lab" / "engine" / "approvals.py"),
+                    "sign",
+                    cp,
+                    str(feature),
+                    author,
+                    *(["--nonce", nonce] if nonce else []),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env={**os.environ, "LAB_APPROVAL_SECRET": secret, "PYTHONUTF8": "1"},
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise EngineError(f"signing {cp} did not finish within 60s") from e
         if p.returncode != 0:
             raise EngineError(f"signing {cp} failed: {(p.stderr or p.stdout).strip()[-300:]}")
         return feature / ".approvals" / cp
@@ -217,8 +221,15 @@ class ClaudoEngine:
     def trajectory(self, project: Path, slug: str, timeout: int = 60) -> tuple[bool, str]:
         """Claudo's trajectory guard: not WHAT the build produced but HOW it got there (a `task_done`
         without a successful attempt = forged journal; a commit touching files outside the task's scope).
-        Returns (ok, output). Read-only; no journal means nothing to check."""
-        p = subprocess.run(
+        Returns (ok, output). Read-only; no journal means nothing to check. A hung guard fails the gate."""
+        try:
+            p = self._trajectory_process(project, slug, timeout)
+        except subprocess.TimeoutExpired:
+            return False, f"the trajectory guard did not finish within {timeout}s"
+        return p.returncode == 0, (p.stdout + p.stderr).strip()
+
+    def _trajectory_process(self, project: Path, slug: str, timeout: int) -> subprocess.CompletedProcess:
+        return subprocess.run(
             [self.python, str(self.home / "lab" / "engine" / "trajectory_guard.py"), f"work/{slug}"]
             + ["--root", str(project)],
             cwd=self.home,
@@ -229,7 +240,6 @@ class ClaudoEngine:
             timeout=timeout,
             env={**os.environ, "PYTHONUTF8": "1"},
         )
-        return p.returncode == 0, (p.stdout + p.stderr).strip()
 
     @staticmethod
     def review_verdict(project: Path, slug: str, cp: str) -> tuple[str, str] | None:
