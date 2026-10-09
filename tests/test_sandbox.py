@@ -67,6 +67,16 @@ def test_the_container_is_hardened_and_never_gets_the_secret(monkeypatch, creden
     assert argv[-4:] == ["lab-agent:latest", "sh", "-c", "uv run pytest"]
 
 
+def test_the_apps_git_directory_is_mounted_read_only_on_top(tmp_path):
+    (tmp_path / ".git").mkdir()
+    argv = Sandbox().argv(tmp_path, ["true"])
+    mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "-v"]
+    assert mounts == [
+        f"{tmp_path.resolve().as_posix()}:/workspace:rw",
+        f"{(tmp_path / '.git').resolve().as_posix()}:/workspace/.git:ro",
+    ]
+
+
 def test_claudo_is_told_to_contain_its_agents_and_their_code():
     env = Sandbox(network="n", proxy="http://p:1").claudo_env()
     assert env["LAB_RUNNER"] == "sandbox" and env["LAB_SANDBOX_NETWORK"] == "n"

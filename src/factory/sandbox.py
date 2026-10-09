@@ -97,7 +97,12 @@ class Sandbox:
         return out
 
     def argv(self, workspace: Path, command: list[str], extra_env: dict[str, str] | None = None) -> list[str]:
-        """The hardened `docker run`, the same confinement as Claudo's sandbox runner."""
+        """The hardened `docker run`, the same confinement as Claudo's sandbox runner.
+
+        The app's .git is mounted read-only on top: the host runs git in this folder afterwards, so code in
+        the container must not be able to plant a hook or a config setting there (audit A1). Agents never
+        commit: the factory and Claudo's orchestrator commit on the host."""
+        ws = Path(workspace).resolve()
         argv = [
             "docker", "run", "--rm", "-i",
             "--network", self.network,
@@ -108,10 +113,11 @@ class Sandbox:
             "--tmpfs", f"{HOME}:rw,exec,nosuid,nodev",  # docker's tmpfs default is noexec: caches run here
             "--pids-limit", str(self.pids),
             "--memory", self.memory,
-            "-v", f"{Path(workspace).resolve().as_posix()}:/workspace:rw",
-            "-w", "/workspace",
-            "-e", f"HOME={HOME}",
+            "-v", f"{ws.as_posix()}:/workspace:rw",
         ]  # fmt: skip
+        if (ws / ".git").exists():
+            argv += ["-v", f"{(ws / '.git').as_posix()}:/workspace/.git:ro"]
+        argv += ["-w", "/workspace", "-e", f"HOME={HOME}"]
         for key, value in sorted({**self.env(), **(extra_env or {})}.items()):
             argv += ["-e", f"{key}={value}"]
         return [*argv, self.image, *command]
