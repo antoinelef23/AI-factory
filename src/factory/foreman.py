@@ -80,11 +80,13 @@ from factory.templates import (
     build_prompt,
     change_build_prompt,
     change_spec_prompt,
+    code_safe_title,
     idea_md,
     offline_change_spec,
     offline_change_tasks,
     offline_spec,
     offline_tasks,
+    one_line,
     plan_prompt,
     spec_prompt,
     with_run_log,
@@ -168,7 +170,7 @@ class Foreman:
             raise FactoryError("an idea needs a title and a description")
         item = WorkItem(
             slug=self.store.new_slug(title),
-            title=title.strip(),
+            title=one_line(title),
             idea=idea.strip(),
             maturity=maturity,
             requester=requester,
@@ -293,7 +295,7 @@ class Foreman:
             raise FactoryError(f"'{target}' already has an open change: {open_change.slug}: merge it first")
         item = WorkItem(
             slug=self.store.new_slug(title),
-            title=title.strip(),
+            title=one_line(title),
             idea=idea.strip(),
             maturity=app_item.maturity,
             requester=requester,
@@ -956,7 +958,11 @@ class Foreman:
             app.mkdir(parents=True, exist_ok=True)
             return "no golden path available: empty app folder"
         item.golden_path = gp
-        values = {"{{slug}}": item.slug, "{{title}}": item.title, "{{module}}": item.slug.replace("-", "_")}
+        values = {
+            "{{slug}}": item.slug,
+            "{{title}}": code_safe_title(item.title, item.slug),  # never raw: it lands in code (A38-A41)
+            "{{module}}": item.slug.replace("-", "_"),
+        }
         for path in sorted(src.rglob("*")):
             if path.is_dir():
                 continue
@@ -1145,9 +1151,10 @@ class Foreman:
     def _pr_body(self, item: WorkItem) -> str:
         spec = self.store.read(item, "spec.md")
         intent = item.idea
-        if "## 1." in spec:  # the section's own heading line is dropped: the PR has its own "Intent" title
-            section = spec.split("## 1.", 1)[1].split("## 2.", 1)[0]
-            intent = section.partition("\n")[2].strip() or item.idea
+        # Headings matched at line start only: a quoted idea may contain "## 2." (audit, templates.py:254).
+        found = re.search(r"^## 1\.[^\n]*\n(.*?)(?=^## 2\.|\Z)", spec, re.M | re.S)
+        if found:  # the section's own heading line is dropped: the PR has its own "Intent" title
+            intent = found.group(1).strip() or item.idea
         gates = [
             ln.removeprefix("## ")
             for ln in self.store.read(item, "gate-report.md").splitlines()

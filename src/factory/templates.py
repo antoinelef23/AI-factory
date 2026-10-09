@@ -9,6 +9,35 @@ from factory.workitem import WorkItem
 # Same token shape as Claudo's plan model: the IDs a task may cite in `implements`.
 SPEC_ID = re.compile(r"\b(?:INV|BHV|EX|EVAL|NG)-[A-Za-z0-9]+\b")
 
+# What a title may keep inside generated SOURCE: letters, digits, spaces and punctuation that is inert in a
+# Python or TypeScript string literal, a docstring, a TOML basic string and HTML text (audit A38-A41).
+_CODE_SAFE = re.compile(r"[^\w .,:;!?()'/+#@%-]", re.UNICODE)
+
+
+def one_line(text: str) -> str:
+    """A title as one line (it lands in headings, table cells, commit and PR subjects)."""
+    return " ".join(text.split())
+
+
+def code_safe_title(title: str, fallback: str) -> str:
+    """The title as it may appear inside generated code: no quote, backslash, angle bracket, brace, backtick,
+    `$` or newline can survive, so it can never close a string or become markup. Cosmetic only: the full
+    title stays in the documents."""
+    safe = one_line(_CODE_SAFE.sub(" ", one_line(title)))[:80].strip()
+    return safe or fallback
+
+
+def quoted(text: str) -> str:
+    """Business text inside a factory document, as a markdown quote: none of its lines can be read as the
+    document's own heading, ID definition (`- **INV-1**:`) or table row (an idea quoting `## 2.` or
+    `INV-2024-07` once broke the offline spec lint for good)."""
+    return "\n".join(f"> {line}" if line.strip() else ">" for line in text.strip().splitlines())
+
+
+def cell(text: str) -> str:
+    """Text for a markdown table cell."""
+    return one_line(text).replace("|", "/")
+
 
 def idea_md(item: WorkItem) -> str:
     return (
@@ -16,7 +45,7 @@ def idea_md(item: WorkItem) -> str:
         f"- requester: {item.requester}\n"
         f"- maturity target: {item.maturity}\n"
         f"- submitted: {item.created}\n\n"
-        f"## What the business wants\n\n{item.idea.strip()}\n"
+        f"## What the business wants\n\n{quoted(item.idea)}\n"
     )
 
 
@@ -36,7 +65,7 @@ validated_by:
 
 ## 1. Intent
 
-{item.idea.strip()}
+{quoted(item.idea)}
 
 **Target KPI:** to be set by the business at spec review.
 
@@ -44,7 +73,7 @@ validated_by:
 
 | Business term | Canonical name (code) | Definition |
 |---|---|---|
-| {item.title} | `{item.slug.replace("-", "_")}` | the application described in the intent |
+| {cell(item.title)} | `{item.slug.replace("-", "_")}` | the application described in the intent |
 
 ## 3. Invariants
 
@@ -251,7 +280,7 @@ validated_by:
 
 ## 1. Intent
 
-{item.idea.strip()}
+{quoted(item.idea)}
 
 **Target KPI:** to be set by the business at spec review.
 
@@ -259,7 +288,7 @@ validated_by:
 
 | Business term | Canonical name (code) | Definition |
 |---|---|---|
-| {item.title} | `{item.slug.replace("-", "_")}` | the {item.kind} described in the intent |
+| {cell(item.title)} | `{item.slug.replace("-", "_")}` | the {item.kind} described in the intent |
 
 ## 3. Invariants
 
