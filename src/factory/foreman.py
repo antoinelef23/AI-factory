@@ -825,7 +825,7 @@ class Foreman:
         if paths:
             caps = item.capabilities or detect_capabilities(item.idea)
             chosen = pick_golden_path(paths, self.radar, caps, item.maturity)
-            return chosen.name if chosen else None
+            return chosen.folder if chosen else None
         mentioned = self.radar.scan_text(item.idea)
         choice = choose_stack(
             self.radar, item.capabilities or detect_capabilities(item.idea), item.maturity, mentioned
@@ -951,6 +951,7 @@ class Foreman:
         if not src or not src.is_dir():
             app.mkdir(parents=True, exist_ok=True)
             return "no golden path available: empty app folder"
+        item.golden_path = gp
         values = {"{{slug}}": item.slug, "{{title}}": item.title, "{{module}}": item.slug.replace("-", "_")}
         for path in sorted(src.rglob("*")):
             if path.is_dir():
@@ -1672,8 +1673,19 @@ class Foreman:
         ok, out = self.engine.trajectory(self.app_dir(item), item.slug)
         return GateResult("trajectory", ok, out or "ok")
 
+    def _gate_commands(self, item: WorkItem) -> dict[str, str]:
+        """The golden path's gate command overrides, read from IT's golden_paths/ folder: never from the copy
+        of golden.toml inside the app, which the build agent can edit (audit A4-A7)."""
+        app_item = item if item.kind == "app" else self.store.load(item.target)
+        folder = app_item.golden_path or self._golden_path(app_item) or ""
+        return golden_gate_commands(self.cfg.golden_paths_dir / folder / "golden.toml") if folder else {}
+
     def _do_gate(self, item: WorkItem) -> tuple[bool, str]:
         app = self.app_dir(item)
+        try:
+            gp_commands = self._gate_commands(item)
+        except ValueError as e:  # IT's own manifest: no agent retry can fix it
+            raise FactoryError(f"cannot gate {item.slug}: {e}; IT must fix the golden path") from e
         self._restore_edited_plan(item, app)
         results = run_gates(
             self.cfg.gates_for(item.maturity),
@@ -1682,7 +1694,7 @@ class Foreman:
             maturity=item.maturity,
             exceptions=item.active_exceptions(self.today()),
             docs=[app / "work" / item.slug / "design.md"],
-            commands={**self.cfg.gate_commands, **golden_gate_commands(app)},
+            commands={**self.cfg.gate_commands, **gp_commands},
             executor=self._gate_executor(item),
             extra={
                 "immutable": lambda: self._immutability_gate(item),
@@ -1712,15 +1724,21 @@ class Foreman:
         return True, "gates passed: " + ", ".join(r.name for r in results)
 
 
-def golden_gate_commands(app: Path) -> dict[str, str]:
-    """Gate command overrides the app's golden path carries in its own golden.toml (e.g. frontend tests)."""
+def golden_gate_commands(manifest: Path) -> dict[str, str]:
+    """Gate command overrides an IT golden path manifest carries (e.g. frontend tests). ValueError when the
+    manifest cannot be read: the gates then fail, they never run without IT's commands."""
     import tomllib
 
-    manifest = app / "golden.toml"
     if not manifest.is_file():
         return {}
-    data = tomllib.loads(manifest.read_text(encoding="utf-8"))
-    return {k: str(v) for k, v in data.get("gates", {}).get("commands", {}).items()}
+    try:
+        data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        raise ValueError(f"{manifest} is not valid TOML: {e}") from e
+    commands = data.get("gates", {}).get("commands", {})
+    if not isinstance(commands, dict):
+        raise ValueError(f"{manifest}: [gates.commands] must be a table")
+    return {k: str(v) for k, v in commands.items()}
 
 
 def describe_step(stage: str) -> str:

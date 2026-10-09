@@ -101,6 +101,7 @@ class WorkItem:
     # first reopen that checkpoint in Claudo's state
     claudo_cp_consumed: bool = False
     claudo_rejection: dict = field(default_factory=dict)  # {cp, reason, by}: IT rejected, rework pending
+    golden_path: str = ""  # the golden_paths/ folder the app was scaffolded from: its IT gate commands
     build_where: str = (
         ""  # where the agent's code ran for the current build: "sandbox" | "host" | "" (no agent)
     )

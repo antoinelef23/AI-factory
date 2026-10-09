@@ -82,7 +82,8 @@ def test_a_frontend_idea_is_scaffolded_from_fullstack_react_with_its_placeholder
     assert "<title>Visitor log</title>" in (app / "web" / "index.html").read_text(encoding="utf-8")
     assert '"name": "visitor-log-web"' in (app / "web" / "package-lock.json").read_text(encoding="utf-8")
     assert "{{" not in (app / "web" / "package.json").read_text(encoding="utf-8")
-    assert golden_gate_commands(app)["tests"].endswith("npm --prefix web test")
+    assert item.golden_path == "fullstack-react"
+    assert foreman._gate_commands(item)["tests"].endswith("npm --prefix web test")
 
 
 def test_a_messaging_idea_is_scaffolded_from_python_worker(foreman):
@@ -90,8 +91,9 @@ def test_a_messaging_idea_is_scaffolded_from_python_worker(foreman):
     item = foreman.approve(foreman.approve(item, "business"), "owner")
     app = foreman.app_dir(item)
     assert (app / "worker" / "__init__.py").is_file() and (app / "app" / "main.py").is_file()
-    assert golden_gate_commands(app) == {}  # the factory's own gate commands apply
+    assert item.golden_path == "python-worker"
+    assert foreman._gate_commands(item) == {}  # the factory's own gate commands apply
 
 
 def test_an_app_without_a_manifest_has_no_gate_overrides(tmp_path):
-    assert golden_gate_commands(tmp_path) == {}
+    assert golden_gate_commands(tmp_path / "golden.toml") == {}

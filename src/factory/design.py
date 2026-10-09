@@ -353,6 +353,7 @@ class GoldenPath:
     techs: tuple[str, ...]
     priority: int = 0
     gate_commands: dict = field(default_factory=dict)
+    folder: str = ""  # the folder under golden_paths/ (the manifest's `name` may differ: audit A97)
 
 
 def load_golden_paths(root: Path) -> list[GoldenPath]:
@@ -370,6 +371,7 @@ def load_golden_paths(root: Path) -> list[GoldenPath]:
                 techs=tuple(data.get("techs", [])),
                 priority=int(data.get("priority", 0)),
                 gate_commands=dict(data.get("gates", {}).get("commands", {})),
+                folder=manifest.parent.name,
             )
         )
     return found
