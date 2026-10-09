@@ -205,7 +205,11 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 - Text matching of technology names: an alias that is also an everyday word ("requests") produced false positives on
   real plans and business ideas. Fixed with `text_strict` (code-like contexts only) for `requests`; any new ambiguous
   radar entry needs the same flag.
-- Roles are self-declared (`--as it`): the signed token proves the factory wrote it, not who the human was.
+- Roles: SOLVED when `[identity] provider = "github"`: the actor is the authenticated `gh` account, it must hold
+  the role in IT's `roles.toml`, `--by` cannot impersonate, approvals record `verified: github`, and `four_eyes`
+  keeps one person from deciding two roles of an item (verified live with the real login). Left: the default is
+  still `provider = "none"` (self-declared, labelled so in PRs), and a person with shell access to the factory
+  machine can edit roles.toml: keep it under review like the radar.
 - Approval secret is held by the orchestrator process on the host, so a host agent with code execution could read it
   (Claudo's documented residual M4; the sandbox runner is the fix, ROADMAP P1-7).
 - Capability detection is keyword-based (idea with "list by employee and month" got no database in live1).

@@ -115,6 +115,24 @@ showing the change branch until IT merges, so `drift` marks that app *in flight*
 failing while a *migration* is pending, since the violation is still there. One open change per app.
 `factory drift --open` now opens migrations that you can simply `run`.
 
+## Who decides: verified identity and roles
+
+By default roles are self-declared (`--as it --by Bob` is trusted; pull requests say "self-declared"). Set
+`[identity] provider = "github"` and the actor becomes the account the `gh` CLI is logged in as. It must hold the
+role it acts in, according to `roles.toml`, which IT maintains like the radar:
+
+```toml
+[roles]
+business = ["alice"]
+it = ["bob", "carol"]
+owner = ["dave"]
+```
+
+Every checkpoint decision, merge, publish, abandon, exception and promotion checks it; `--by` can only repeat
+the verified login; approvals (and the pull request) record `verified: github`, and the signed Claudo token
+carries that name. `four_eyes = true` adds separation of duties: one person cannot decide checkpoints for two
+different roles of the same item (approve the plan as owner, then ship it as IT).
+
 ## Deliver to GitHub: one private repo per app, one pull request per change
 
 Off by default. Set `[delivery] provider = "github"` in `factory.toml` (needs the `gh` CLI, already logged in):

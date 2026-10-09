@@ -15,6 +15,7 @@ from factory.delivery import GhCli
 from factory.drift import radar_diff, render_diff, scan_drift
 from factory.foreman import FactoryError, Foreman, describe_step
 from factory.guard import check_project
+from factory.identity import GhIdentity, IdentityError, load_roles
 from factory.importer import import_radar
 from factory.radar import MATURITIES, POLICY, RINGS, RadarError, load_radar
 from factory.workitem import ROLES, Store, WorkItem
@@ -27,6 +28,9 @@ def _foreman(args: argparse.Namespace, runner_name: str | None = None) -> Forema
     home = discover(cfg.claudo_home, root)  # None = no Claudo around: plans are simply not linted
     engine = ClaudoEngine(home) if home else None
     host = GhCli() if cfg.delivery_provider == "github" else None
+    identity, roles = None, None
+    if cfg.identity_provider == "github":
+        identity, roles = GhIdentity(), load_roles(cfg.roles_path)
     return Foreman(
         cfg,
         radar,
@@ -34,6 +38,8 @@ def _foreman(args: argparse.Namespace, runner_name: str | None = None) -> Forema
         runner=get_runner(runner_name or cfg.runner),
         engine=engine,
         host=host,
+        identity=identity,
+        roles=roles,
     )
 
 
@@ -521,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, RadarError, FactoryError, AgentError, EngineError, KeyError) as e:
+    except (ConfigError, RadarError, FactoryError, AgentError, EngineError, IdentityError, KeyError) as e:
         msg = e.args[0] if isinstance(e, KeyError) and e.args else e
         print(f"error: {msg}", file=sys.stderr)
         return 2

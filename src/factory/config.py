@@ -34,6 +34,9 @@ class Config:
     max_build_attempts: int = 3
     claudo_home: str | None = None  # [engine] claudo; None = auto-discover (CLAUDO_HOME, sibling checkout)
     plan_lint_retries: int = 2  # [engine] plan_lint_retries: re-prompts with Claudo's lint errors
+    identity_provider: str = "none"  # [identity] provider: none (self-declared roles) | github
+    roles_path: Path = Path("roles.toml")  # [identity] roles: who holds which role (IT-owned)
+    four_eyes: bool = False  # [identity] four_eyes: one person cannot decide two roles of one item
     delivery_provider: str = "none"  # [delivery] provider: none | github
     delivery_owner: str = (
         ""  # [delivery] owner: account/org for the repositories ("" = the authenticated user)
@@ -98,6 +101,9 @@ def load_config(root: Path) -> Config:
         judge_thinking_tokens=agent.get("judge_thinking_tokens"),
         claudo_home=data.get("engine", {}).get("claudo") or None,
         plan_lint_retries=max(0, int(data.get("engine", {}).get("plan_lint_retries", 2))),
+        identity_provider=data.get("identity", {}).get("provider", "none"),
+        roles_path=root / data.get("identity", {}).get("roles", "roles.toml"),
+        four_eyes=bool(data.get("identity", {}).get("four_eyes", False)),
         delivery_provider=data.get("delivery", {}).get("provider", "none"),
         delivery_owner=data.get("delivery", {}).get("owner", ""),
         repo_prefix=data.get("delivery", {}).get("repo_prefix", "app-"),
@@ -115,6 +121,10 @@ def load_config(root: Path) -> Config:
     if cfg.judge_from and cfg.judge_from not in DEFAULT_GATES:
         raise ConfigError(
             f"{path}: [agent] judge_from = {cfg.judge_from!r}, expected '' or one of {sorted(DEFAULT_GATES)}"
+        )
+    if cfg.identity_provider not in ("none", "github"):
+        raise ConfigError(
+            f"{path}: [identity] provider = {cfg.identity_provider!r}, expected 'none' or 'github'"
         )
     if cfg.delivery_provider not in ("none", "github"):
         raise ConfigError(

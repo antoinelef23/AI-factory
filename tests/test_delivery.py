@@ -14,6 +14,13 @@ from tests.test_change_flow import ChangeAgent, git, shipped_app, to_plan_review
 from tests.test_drift import radar_with
 
 
+def set_delivery_provider(toml_text, provider):
+    """Set `provider` in the [delivery] section only ([identity] has a `provider` key too)."""
+    head, sep, tail = toml_text.partition("[delivery]")
+    assert sep, "factory.toml has no [delivery] section"
+    return head + sep + tail.replace('provider = "none"', f'provider = "{provider}"', 1)
+
+
 class FakeHost:
     """A git host whose 'remote' repositories are bare repos in a temp folder."""
 
@@ -326,9 +333,7 @@ def test_repo_exists_distinguishes_missing_from_a_real_failure(monkeypatch):
 def test_delivery_defaults_to_off_and_rejects_unknown_providers(factory_root):
     assert load_config(factory_root).delivery_provider == "none"
     toml = factory_root / "factory.toml"
-    toml.write_text(
-        toml.read_text(encoding="utf-8").replace('provider = "none"', 'provider = "ftp"'), encoding="utf-8"
-    )
+    toml.write_text(set_delivery_provider(toml.read_text(encoding="utf-8"), "ftp"), encoding="utf-8")
     from factory.config import ConfigError
 
     with pytest.raises(ConfigError, match="expected 'none' or 'github'"):
@@ -584,7 +589,7 @@ def test_gh_closes_a_pull_request_deleting_its_branch_and_never_merges(gh_calls)
 def _configure_cli(factory_root, monkeypatch, provider):
     monkeypatch.setenv("AI_FACTORY_ROOT", str(factory_root))
     toml = factory_root / "factory.toml"
-    text = toml.read_text(encoding="utf-8").replace('provider = "none"', f'provider = "{provider}"')
+    text = set_delivery_provider(toml.read_text(encoding="utf-8"), provider)
     toml.write_text(text.replace(', "tests"', "", 1), encoding="utf-8")
 
 

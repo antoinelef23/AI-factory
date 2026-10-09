@@ -1,0 +1,7 @@
+# Who holds which role in this factory: maintained by IT, like radar.toml.
+# Used only when factory.toml sets [identity] provider = "github": the acting person is then the GitHub account
+# `gh` is logged in as, and it must be listed here for the role it acts in (`--as`). Logins are case-insensitive.
+[roles]
+business = ["antoinelef23"]
+it = ["antoinelef23"]
+owner = ["antoinelef23"]

@@ -37,6 +37,7 @@ from factory.detect import pyproject_dependencies
 from factory.drift import Drift, migration_idea
 from factory.gates import Executor, GateResult, format_report, run_gates, secrets_in_history, shell_executor
 from factory.guard import check_project, plan_radar_errors, plan_scope_errors
+from factory.identity import IdentityError, IdentityProvider, RoleMap
 from factory.judge import judge_panel
 from factory.project import (
     CHANGE_BUILD_COMMIT,
@@ -110,6 +111,8 @@ class Foreman:
         engine: ClaudoEngine | None = None,
         host: GitHost | None = None,
         locker: Callable[[Path], tuple[int, str]] | None = None,
+        identity: IdentityProvider | None = None,
+        roles: RoleMap | None = None,
     ) -> None:
         self.cfg = cfg
         self.radar = radar
@@ -119,6 +122,8 @@ class Foreman:
         self.today: Callable[[], date] = date.today  # injectable clock (tests)
         self.engine = engine  # Claudo: validates every plan with its own plan-lint when present
         self.host = host  # git host for `publish` / `sync` (None = delivery is off)
+        # Who is acting: None = self-declared roles (`--as` / `--by` are trusted); else verified + roles.toml.
+        self.identity, self.roles = identity, roles or RoleMap()
         self.locker = locker or lock_dependencies  # `uv lock` for a new app (injectable: tests stay offline)
 
     # ------------------------------------------------------------------ intake
@@ -243,6 +248,39 @@ class Foreman:
         item.stage = nxt.name
         item.status = "active"
 
+    def _actor(self, role: str, by: str) -> tuple[str, str]:
+        """(name, how it was verified) of whoever acts in `role`. Without an identity provider the name is
+        self-declared (`--by`). With one, it is the verified account, which must hold `role` in roles.toml;
+        `--by` may only repeat it."""
+        if self.identity is None:
+            return by or role, ""
+        try:
+            who = self.identity.current()
+        except IdentityError as e:
+            raise FactoryError(str(e)) from e
+        if not self.roles.holds(who.login, role):
+            held = ", ".join(self.roles.roles_of(who.login)) or "none"
+            raise FactoryError(
+                f"{who.login} ({who.source}) does not hold the role '{role}' in roles.toml (holds: {held})"
+            )
+        if by and by.lower() != who.login.lower():
+            raise FactoryError(f"--by {by!r} is not the verified identity {who.login!r} ({who.source})")
+        return who.login, who.source
+
+    def _check_four_eyes(self, item: WorkItem, role: str, who: str) -> None:
+        """Separation of duties: one person never decides checkpoints for two different roles of an item."""
+        if not self.cfg.four_eyes or self.identity is None:
+            return
+        other = next(
+            (a for a in item.approvals if a.get("by", "").lower() == who.lower() and a.get("role") != role),
+            None,
+        )
+        if other:
+            raise FactoryError(
+                f"four-eyes: {who} already decided '{other['stage']}' as {other['role']}; another person "
+                f"must decide as {role}"
+            )
+
     def _require_checkpoint(self, item: WorkItem, role: str) -> None:
         if role not in ROLES:
             raise FactoryError(f"role must be one of {ROLES}")
@@ -254,6 +292,8 @@ class Foreman:
 
     def approve(self, item: WorkItem, role: str, by: str = "", note: str = "") -> WorkItem:
         self._require_checkpoint(item, role)
+        by, verified = self._actor(role, by)
+        self._check_four_eyes(item, role, by)
         if item.stage == "design_review":
             pending = self._design_report(item).needs_approval()
             granted = {v.key for v in pending} - item.active_exceptions(self.today())
@@ -298,7 +338,9 @@ class Foreman:
         elif item.stage == "ship_review":
             self._seal_approved_head(item)
             item.claudo_cp, item.claudo_cp_consumed = "", False  # a re-decision approved: Claudo is done
-        item.approvals.append({"stage": item.stage, "role": role, "by": by or role, "note": note})
+        item.approvals.append(
+            {"stage": item.stage, "role": role, "by": by or role, "note": note, "verified": verified}
+        )
         item.log("approved", f"{role} {by}".strip() + (f": {note}" if note else ""))
         item.feedback = ""
         self._advance(item)
@@ -336,6 +378,7 @@ class Foreman:
 
     def reject(self, item: WorkItem, role: str, reason: str, by: str = "") -> WorkItem:
         self._require_checkpoint(item, role)
+        by, _ = self._actor(role, by)
         if not reason.strip():
             raise FactoryError("a rejection needs a reason (it is fed to the next attempt)")
         back = item.step.on_reject
@@ -370,6 +413,7 @@ class Foreman:
         """IT grants a radar exception for this item (e.g. a trial tech at MVP), with its terms."""
         if role != "it":
             raise FactoryError("only IT can grant a tech radar exception")
+        by, _ = self._actor(role, by)
         if expires is not None and expires < self.today():
             raise FactoryError(f"an exception cannot expire in the past ({expires.isoformat()})")
         known = self.radar.get(tech) or self.radar.find(tech)
@@ -390,6 +434,7 @@ class Foreman:
         """POV -> POC -> MVP -> prod: back through design with the stricter rules."""
         if role != "it":
             raise FactoryError("only IT can promote an app to a higher maturity")
+        by, _ = self._actor(role, by)
         if item.kind != "app":
             raise FactoryError("only an app is promoted; a change inherits its app's maturity")
         if item.stage != "shipped":
@@ -805,6 +850,7 @@ class Foreman:
         This is the human's explicit act: the factory itself never merges. A new app has nothing to merge."""
         if role != "it":
             raise FactoryError("only IT merges: the factory never merges on its own")
+        by, _ = self._actor(role, by)
         if item.kind == "app":
             raise FactoryError("only a change to an existing app is merged; a new app is delivered as built")
         if item.merged:
@@ -847,6 +893,7 @@ class Foreman:
         request; merging it is IT's act on the host."""
         if role != "it":
             raise FactoryError("only IT publishes: it is the step that leaves this machine")
+        by, _ = self._actor(role, by)
         host = self._host()
         if item.stage != "shipped":
             raise FactoryError(f"'{item.slug}' is not approved yet (it is at stage '{item.stage}')")
@@ -942,7 +989,9 @@ class Foreman:
             if ln.startswith("## ")
         ]
         approvals = [
-            f"- {a['stage']}: {a['role']} {a['by']}" + (f" ({a['note']})" if a.get("note") else "")
+            f"- {a['stage']}: {a['role']} {a['by']}"
+            + (f" (verified: {a['verified']})" if a.get("verified") else " (self-declared)")
+            + (f" ({a['note']})" if a.get("note") else "")
             for a in item.approvals
         ]
         review = item.claudo_review
@@ -1080,6 +1129,7 @@ class Foreman:
         """Drop a change nobody wants anymore, freeing the app for the next one (never a merged change)."""
         if role not in ("it", "owner"):
             raise FactoryError("only IT or the owner abandons a change")
+        by, _ = self._actor(role, by)
         if item.kind == "app":
             raise FactoryError("only a change to an existing app can be abandoned")
         if item.merged:

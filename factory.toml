@@ -41,6 +41,15 @@ exception_days = 180
 # sees it; an agent-written one is re-prompted with the errors this many times, then blocked.
 spec_lint_retries = 2
 
+[identity]
+# Who is acting. "none": roles are self-declared (`--as it --by Bob` is trusted, approvals say so). "github": the
+# actor is the account the `gh` CLI is logged in as; it must hold the role in `roles` (IT-owned, like the radar),
+# `--by` can only repeat it, and approvals record that it was verified. four_eyes = true: one person cannot decide
+# checkpoints for two different roles of the same item (e.g. approve the plan as owner, then ship it as IT).
+provider = "none"
+roles = "roles.toml"
+four_eyes = false
+
 [delivery]
 # Where shipped apps go. OFF by default: nothing leaves this machine unless IT runs `factory publish`.
 # "github": one PRIVATE repository per app (named repo_prefix + slug) and one pull request per change, through the
