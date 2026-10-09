@@ -22,6 +22,59 @@ CAPABILITY_KEYWORDS = {
 }
 
 
+OPTIONAL_CAPABILITIES = {
+    "frontend": "screens or pages people use in a browser",
+    "database": "data kept between requests (records, lists, history, filters over past entries)",
+    "ai": "generating, summarising or classifying text or content with a model",
+    "messaging": "events, queues or streams between systems",
+}
+
+
+def capabilities_prompt(idea: str, offered: list[str]) -> str:
+    """Ask a model which OPTIONAL capabilities an idea needs, each justified by words of the idea."""
+    menu = "\n".join(f"- {c}: {OPTIONAL_CAPABILITIES[c]}" for c in offered)
+    return f"""You are the capability analyst of an AI software factory. Read the business idea and say which
+of these capabilities the application NEEDS. Do not choose technologies.
+
+{menu}
+
+<idea>
+{idea.strip()}
+</idea>
+
+For each capability you select, quote the EXACT words of the idea (3 to 120 characters, copied verbatim) that
+show the need. A capability without a verbatim quote is discarded. Select nothing the idea does not imply.
+Answer with ONLY this JSON: {{"capabilities": [{{"id": "<capability>", "quote": "<verbatim words>"}}]}}
+"""
+
+
+def grounded_capabilities(answer: str, idea: str, offered: list[str]) -> tuple[list[str], list[str]]:
+    """(capabilities accepted, problems) from a model answer: known capabilities only, each with a quote that
+    really occurs in the idea (case and spacing ignored)."""
+    import json
+
+    start, end = answer.find("{"), answer.rfind("}")
+    try:
+        data = json.loads(answer[start : end + 1]) if 0 <= start < end else None
+    except json.JSONDecodeError:
+        data = None
+    if not isinstance(data, dict) or not isinstance(data.get("capabilities"), list):
+        return [], ["the capability analyst's answer is not the expected JSON"]
+    norm = lambda t: re.sub(r"\s+", " ", t).strip().lower()  # noqa: E731
+    haystack, accepted, problems = norm(idea), [], []
+    for entry in data["capabilities"]:
+        if not isinstance(entry, dict):
+            continue
+        cap, quote = str(entry.get("id", "")).strip().lower(), norm(str(entry.get("quote", "")))
+        if cap not in offered:
+            problems.append(f"unknown capability {cap!r} ignored")
+        elif len(quote) < 3 or quote not in haystack:
+            problems.append(f"{cap}: quote not found in the idea, ignored")
+        elif cap not in accepted:
+            accepted.append(cap)
+    return accepted, problems
+
+
 def detect_capabilities(idea: str) -> list[str]:
     caps = list(BASE_CAPABILITIES)
     for cap, pattern in CAPABILITY_KEYWORDS.items():

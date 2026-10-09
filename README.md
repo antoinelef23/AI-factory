@@ -35,6 +35,9 @@ idea --> triage --> spec --> [business] --> design --> [IT*] --> plan --> [owner
   manifest it cannot parse **blocks**, and one from an ecosystem it does not analyse (`go.mod`, `pom.xml`,
   `build.gradle`, `Cargo.toml`, `Gemfile`, `composer.json`) needs IT's review. In a git project it scans everything
   git tracks, whatever the folder is called.
+- **Capabilities**: triage spots what an idea needs (frontend, database, AI, messaging) by keywords, and an LLM
+  analyst (`[agent] capability_analyst`, `models.triage`) adds what they miss; each of its claims must quote the
+  idea verbatim or it is dropped. Only the radar then chooses the technologies.
 - **Dependency policy** (gate `dependencies`, MVP and prod): a radar entry may pin the versions IT accepts for the
   package it is named after (`version = ">=0.115"`), checked against the version actually **locked** in `uv.lock`;
   `[licenses] forbidden = ["AGPL", "SSPL", ...]` in `radar.toml` is checked against each installed package's licence

@@ -28,9 +28,12 @@ from factory.config import Config
 from factory.delivery import DeliveryError, GitHost
 from factory.design import (
     CHANGE_KINDS,
+    OPTIONAL_CAPABILITIES,
+    capabilities_prompt,
     choose_stack,
     detect_capabilities,
     existing_stack,
+    grounded_capabilities,
     render_change_design,
     render_design,
 )
@@ -553,8 +556,33 @@ class Foreman:
             return False, f"{role} agent failed: {result.error or 'empty answer'}"
         return True, strip_fences(result.text)
 
+    def _llm_capabilities(self, item: WorkItem, found: list[str]) -> list[str]:
+        """Optional capabilities a model reads in the idea that the keywords missed (ROADMAP P3-9). Each
+        must be justified by a verbatim quote of the idea; anything else is dropped. Keywords stay the floor;
+        the technology choice stays deterministic (the radar compiles the design)."""
+        offered = [c for c in OPTIONAL_CAPABILITIES if self.radar.by_category(c)]
+        if self.runner is None or not offered or not self.cfg.capability_analyst:
+            return []
+        result = self.runner.run(
+            capabilities_prompt(item.idea, offered),
+            cwd=self.store.dir(item.slug),
+            model=self.cfg.models.get("triage"),
+            tools=[],
+            max_turns=1,
+        )
+        item.cost_usd += result.cost_usd
+        if not result.ok:
+            item.log("capabilities", f"analyst failed, keywords only: {result.error[:200]}")
+            return []
+        accepted, problems = grounded_capabilities(result.text, item.idea, offered)
+        added = [c for c in accepted if c not in found]
+        detail = f"analyst added {', '.join(added)}" if added else "analyst agreed with the keywords"
+        item.log("capabilities", detail + (f" ({'; '.join(problems)})" if problems else ""))
+        return added
+
     def _do_triage(self, item: WorkItem) -> tuple[bool, str]:
         item.capabilities = detect_capabilities(item.idea)
+        item.capabilities += self._llm_capabilities(item, item.capabilities)
         notes = []
         for tech in self.radar.scan_text(item.idea):
             v = verdict(tech, item.maturity)

@@ -119,6 +119,7 @@ def executor() -> FakeExecutor:
 @pytest.fixture
 def foreman(factory_root: Path, executor: FakeExecutor) -> Foreman:
     cfg = load_config(factory_root)
+    cfg.capability_analyst = False  # unrelated tests script their agents; test_capabilities.py turns it on
     return Foreman(
         cfg,
         load_radar(cfg.radar_path),

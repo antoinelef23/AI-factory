@@ -53,6 +53,7 @@ class Config:
     claudo_budget_usd: float = 0.0  # [engine] budget_usd: per-run spend cap passed to Claudo (0 = none)
     judge_enabled: bool = False
     judge_from: str = ""  # [agent] judge_from: judge automatically from this maturity up ("" = off)
+    capability_analyst: bool = True  # [agent] capability_analyst: LLM reads capabilities (P3-9)
     judge_votes: int = 1  # [agent] judge_votes: independent judge runs per artifact, median per criterion
     judge_thinking_tokens: int | None = None  # None = model default (expensive); 0 disables thinking
     models: dict[str, str] = field(default_factory=dict)
@@ -99,6 +100,7 @@ def load_config(root: Path) -> Config:
         max_build_attempts=max(1, int(agent.get("max_build_attempts", 3))),
         judge_enabled=bool(agent.get("judge", False)),
         judge_from=str(agent.get("judge_from", "")),
+        capability_analyst=bool(agent.get("capability_analyst", True)),
         judge_votes=max(1, int(agent.get("judge_votes", 1))),
         judge_thinking_tokens=agent.get("judge_thinking_tokens"),
         claudo_home=data.get("engine", {}).get("claudo") or None,

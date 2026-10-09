@@ -22,9 +22,11 @@ judge_votes = 3
 # judge_thinking_tokens: unset = model default. Measured on one real spec (haiku): default thinking ~$0.08 and
 # caught invented requirements; budget 3000 ~$0.05; budget 0 ~$0.02 but MISSED them (fidelity 5). Cheap judging
 # is a false economy, so leave it unset unless you re-run the calibration.
+capability_analyst = true         # an LLM also reads which capabilities the idea needs (quotes checked; keywords stay)
 max_build_attempts = 3           # build -> gate loops per `run` before a human is asked (agent runners only)
 
 [agent.models]                    # passed to `claude --model` (aliases accepted)
+triage = "sonnet"                 # capability analyst (P3-9): one small call per idea
 spec = "sonnet"
 plan = "sonnet"
 build = "sonnet"

@@ -33,6 +33,10 @@ reuse), `50783e7` (reuse keyed on the reviewed tree), `94202b4` (unbound tokens 
   from a label or a `Maturity:` line, author as requester, business role required when identity is on), comments
   on receipt and on every stage change. Live smoke on the private `v2-app-ping-service`: issue #2 imported, receipt
   and "waiting for business" comments posted, issue closed afterwards.
+- **P3-9 capability analyst**: at triage an LLM (`models.triage`) says which optional capabilities the idea needs,
+  each with a verbatim quote of the idea (checked; ungrounded or unknown claims dropped); keywords stay the floor,
+  failures fall back to them, the technology is still chosen by the radar. Live: the live1 idea (keywords missed
+  its database) got `database` and `frontend`, both grounded, $0.017.
 
 ### After V-1/V-2 (2026-10-09, Opus): the live findings fixed, the judge as a panel
 - **Plan restore** (finding 1): the `## Run log` section is bookkeeping, but only its table rows, blank lines and
@@ -225,7 +229,8 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
   machine can edit roles.toml: keep it under review like the radar.
 - Approval secret is held by the orchestrator process on the host, so a host agent with code execution could read it
   (Claudo's documented residual M4; the sandbox runner is the fix, ROADMAP P1-7).
-- Capability detection is keyword-based (idea with "list by employee and month" got no database in live1).
+- Capability detection: keywords plus, since 2026-10-09, an LLM analyst whose claims must quote the idea (live:
+  the live1 idea now gets its database, $0.017). The stack is still compiled from the radar.
 - Claudo's two Opus reviews dominate MVP cost (above).
 - Only one golden path (python-fastapi).
 
@@ -244,4 +249,4 @@ it), a published app's changes can only merge through their PR, and `abandon` cl
 
 ## Next steps (in order)
 1. P1-7: sandbox runner by default for MVP+ builds (needs Claudo's egress-allowlist proxy and Docker).
-2. P3-8 more golden paths; P3-9 LLM capability extraction.
+2. P3-8 more golden paths.
