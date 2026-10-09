@@ -43,6 +43,19 @@ def test_a_hung_trajectory_guard_fails_the_gate(monkeypatch, tmp_path):
         engine.sign_approval(tmp_path, "x", "CP-1", "bob", "secret")
 
 
+def test_the_trajectory_guard_result_is_its_exit_code_and_output(monkeypatch, tmp_path):
+    engine = ClaudoEngine(fake_claudo(tmp_path / "c"))
+    outcomes = iter([(0, "ok\n", ""), (1, "", "forged task_done\n")])
+
+    def finished(argv, **k):
+        code, out, err = next(outcomes)
+        return subprocess.CompletedProcess(argv, code, out, err)
+
+    monkeypatch.setattr(claudo.subprocess, "run", finished)
+    assert engine.trajectory(tmp_path, "x") == (True, "ok")
+    assert engine.trajectory(tmp_path, "x") == (False, "forged task_done")
+
+
 def gh_answering(monkeypatch, stdout):
     monkeypatch.setattr(
         delivery.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=stdout, stderr="")

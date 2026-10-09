@@ -348,3 +348,13 @@ def test_the_state_directory_outside_windows(monkeypatch, tmp_path):
     environ.clear()
     assert state_dir() == Path.home() / ".local" / "state" / "ai-factory"
     assert os.name and Tech  # the real os module is untouched; Tech is used by the radar tests above
+
+
+def test_the_state_directory_on_windows(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    monkeypatch.setattr(claudo, "os", SimpleNamespace(name="nt", environ=environ))
+    assert state_dir() == tmp_path / "ai-factory"
+    environ.clear()
+    assert state_dir() == Path.home() / "AppData" / "Local" / "ai-factory"
